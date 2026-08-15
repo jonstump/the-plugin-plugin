@@ -122,6 +122,13 @@ This project uses the [SDD plugin](https://github.com/joestump/claude-plugin-sdd
 - Architecture Decision Records are in `docs/adrs/`
 - Specifications are in `docs/openspec/specs/`
 
+### SDD Configuration
+
+#### Tracker
+- **Type**: github
+- **Owner**: jonstump
+- **Repo**: the-plugin-plugin
+
 ### qmd Dependency
 
 Starting with SDD plugin v5.0.0, [qmd](https://github.com/tobi/qmd) is a hard dependency — `/sdd:init` enforces qmd presence at setup, and every qmd-aware consumer skill (`/sdd:prime`, `/sdd:check`, `/sdd:audit`, `/sdd:discover`, `/sdd:adr`, `/sdd:spec`, `/sdd:plan`, `/sdd:work`, `/sdd:review`) MAY assume qmd is installed and MUST NOT include conditional fallback paths. If a skill needs to handle "qmd installed but this repo not yet indexed", it routes to `/sdd:index` rather than silently degrading. This invariant lets every skill be designed for hybrid retrieval rather than around its absence.
