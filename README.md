@@ -12,8 +12,11 @@ package's own manifest.
 
 ## Status
 
-Early scaffolding — no feature code yet. See [CLAUDE.md](CLAUDE.md) for the
-full v1 scope and project rules.
+The full v1 scope is implemented and merged: manifest fetching, the
+compatibility classification layer, the GM-only checker table (with
+pinning and copy-report), and the login notification. No tagged release
+exists yet. See [CLAUDE.md](CLAUDE.md) for the full v1 scope and project
+rules.
 
 ## Important: compatibility is developer-declared, not tested
 
