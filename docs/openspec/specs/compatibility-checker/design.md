@@ -1,0 +1,188 @@
+# Design: Compatibility Checker
+
+## Context
+
+Foundry's built-in Pre-Flight Compatibility Checklist only exists on the
+pre-login Setup screen, so GMs who stay logged into their world never see
+it. This capability closes that gap by running the same kind of check
+in-world, GM-only, entirely client-side.
+
+Two accepted ADRs constrain this design directly:
+
+- **ADR-0001**: there is no reliable, credential-free way to ask Foundry
+  itself for the latest core version from inside a running world (tested:
+  no CORS-open unauthenticated endpoint exists, and the one endpoint that
+  is CORS-open requires a privileged license-derived key we're barred from
+  collecting). Instead, `inferredLatest` is derived from the highest
+  `compatibility.verified` already declared across the GM's own installed
+  packages — data already being fetched for the core update check, so this
+  costs nothing new.
+- **ADR-0002**: a `compatibility.verified` lag alone is weak evidence — it
+  usually just means a developer hasn't updated manifest bookkeeping, not
+  that their package is broken. Severity escalation (toasts, summary
+  "problem" counts) is gated on `compatibility.maximum`, Foundry's own
+  hard ceiling, which is an actual developer claim rather than an
+  inference.
+
+`docs/research/mcc-research.md` documents the prior art this design
+deliberately diverges from: `arcanistzed/mcc` depended on a Cloudflare
+Worker, a community-maintained Google Sheet, and a privileged
+foundryvtt.com API key, and died when that standing infrastructure and
+community effort faded. Every design choice here — no server, no
+credentials, no crowdsourced data — traces back to that failure mode.
+
+## Goals / Non-Goals
+
+### Goals
+
+- Fully automatic compatibility and update-availability signal, requiring
+  no GM action and no external service.
+- Never present a developer-declared claim (from a manifest) as if it were
+  independently tested or verified by anyone but that developer.
+- Never use language that frames a lagging or unmaintained-looking package
+  as "dead," "broken," or "abandoned."
+- Keep the entire capability client-side: no server component, no API
+  keys, no crowdsourced data source.
+
+### Non-Goals
+
+- Transitive `relationships.requires` dependency expansion (explicitly
+  deferred to v1.5 per CLAUDE.md).
+- Auto-updating modules — this capability only reports status, never
+  installs or modifies packages.
+- Setup-screen integration — this capability is entirely in-world.
+- A proxy or relay server of any kind, even a minimal one — ruled out by
+  ADR-0001's option analysis and CLAUDE.md project rule 5.
+- Asking a GM for their Foundry license key or any other credential, to
+  reach the license-authenticated `/_api/packages/get` endpoint discussed
+  in ADR-0001 — explicitly rejected there as an "API key" by any
+  reasonable definition, and a genuine security/privacy concern
+  independent of that framing.
+
+### Note on the Security Requirements section
+
+This spec's `## Requirements` section does not include a "Security
+Requirements" section, even though the capability involves fetching data
+over HTTP and rendering UI. This module has no server component of its
+own — no HTTP endpoints, no routes, no auth boundary, nothing that
+receives a request from anyone. It only ever makes outbound `fetch()`
+calls, as a client, to third-party manifest URLs and the GitHub API. The
+standard web-security template (endpoint auth, CSRF, rate limiting,
+redirect validation) has no referent here; injecting it would document
+controls that don't apply to anything in this system. The Accessibility
+Requirements section *is* included, since the checker window is real
+browser-rendered UI a GM interacts with directly.
+
+## Decisions
+
+### `inferredLatest` computed from the same fetch pass as the update check
+
+**Choice**: `inferredLatest` is computed as a pure derived value —
+`max(compatibility.verified)` across all manifests already fetched for the
+Requirement: Manifest Check pass — rather than a separate fetch or check.
+
+**Rationale**: Zero additional network cost, and it keeps the "no new
+infrastructure" property from ADR-0001 literally true in the
+implementation, not just the decision record.
+
+**Alternatives considered**:
+- A dedicated "version check" pass, fetching a curated list of bellwether
+  packages: rejected — adds a second fetch pass and a maintained list of
+  bellwether package IDs for no benefit over just using everything the GM
+  already has installed.
+
+### Severity is a derived classification, not a stored field
+
+**Choice**: Hard/soft severity (ADR-0002) is computed at check-time from
+`compatibility.maximum` and the comparison target, not stored as
+persistent state.
+
+**Rationale**: Comparison targets (`game.release`, `inferredLatest`)
+change on every check; storing a stale severity classification would risk
+it drifting from the manifest data it's derived from. KISS: recompute
+every time.
+
+**Alternatives considered**:
+- Cache severity per package across sessions: rejected — the Requirement:
+  Fetch Concurrency and Caching requirement already caches raw fetch
+  *results* for the session; caching a derived classification on top adds
+  a second cache to keep in sync for no real performance benefit, since
+  the classification computation itself is cheap (a version-string
+  comparison, not a network call).
+
+### GitHub `archived` lookup is scoped to already-failing packages only
+
+**Choice**: The "possibly unmaintained" heuristic only queries the GitHub
+API for packages that have already failed the verified-compatibility
+check, per the spec's Requirement: Possibly Unmaintained Heuristic.
+
+**Rationale**: Keeps the unauthenticated GitHub API call volume
+proportional to actual candidates, respecting rate limits, and avoids
+spending a GitHub API call on every installed package when most will never
+need the "possibly unmaintained" classification at all.
+
+**Alternatives considered**:
+- Query `archived` for every GitHub-hosted package up front: rejected —
+  needlessly burns rate-limit budget on packages that already pass the
+  verified check and can never reach "possibly unmaintained" status.
+
+## Architecture
+
+```mermaid
+sequenceDiagram
+    participant GM as GM (browser)
+    participant App as Checker (ApplicationV2)
+    participant Cache as Session cache
+    participant Pkg as Package manifest URLs
+    participant GH as GitHub API (archived field)
+
+    GM->>App: Open checker / world ready
+    App->>Cache: Check for cached results
+    alt cache miss or explicit re-check
+        App->>Pkg: Fetch manifest (concurrency-limited)
+        Pkg-->>App: manifest JSON or error, per package
+        App->>App: Compute inferredLatest = max(verified) across all
+        App->>App: Classify each package: severity (hard/soft) vs game.release and inferredLatest
+        App->>GH: archived? (only for packages failing verified check)
+        GH-->>App: archived: true/false, or failure -> "unknown"
+        App->>Cache: Store results for session
+    end
+    App-->>GM: Render checker table
+    App-->>GM: Whispered chat summary + toast (hard-severity/unmaintained pinned modules only)
+```
+
+## Risks / Trade-offs
+
+- **`inferredLatest` produces false negatives when the GM's whole modlist
+  is uniformly behind** → Accepted per ADR-0001: this degrades to "no
+  peer signal," identical to having no target-version check at all, not a
+  false "you're all set."
+- **Hard/soft severity under-flags real breakage when a developer knew
+  about it but never set `compatibility.maximum`** → Accepted per
+  ADR-0002: erring toward not nagging over erring toward alarming on an
+  unconfirmed claim, consistent with project rule 1 (kindness to
+  developers).
+- **GitHub API rate limits (60/hour unauthenticated)** → Mitigated by
+  scoping `archived` lookups to already-failing packages only, and by
+  session caching so repeated checkers windows within a session don't
+  re-query.
+- **A GM with many installed packages could see a slow initial scan** →
+  Mitigated by the concurrency cap (Requirement: Fetch Concurrency and
+  Caching) and session-level caching so the cost is paid once per session,
+  not once per checker-window open.
+
+## Migration Plan
+
+Greenfield — no prior version of this capability exists in this repo.
+
+## Open Questions
+
+- What is the right concurrency-limit number for manifest fetches? Needs a
+  concrete default (e.g., 5–8 in-flight) chosen during implementation and
+  validated against a realistic large-modlist GM setup.
+- Should the frequency-setting comparison hash include soft-severity
+  packages, or only hard-severity + unmaintained, so that a purely
+  soft-severity-only change doesn't trigger a "results changed"
+  notification under the default frequency setting? Not resolved by
+  ADR-0001 or ADR-0002 — worth deciding before `/sdd:plan` breaks this
+  into issues.
