@@ -281,11 +281,20 @@ function toPackageInfo(pkg, isSystem = false) {
 /**
  * Governing: SPEC-0001 REQ "Manifest Check" — active modules plus the
  * active game system are the full package set in scope for this check.
+ *
+ * `game.modules` is a Foundry `Collection`. It extends `Map` (so
+ * `instanceof Map` is true), but it overrides `Symbol.iterator` to yield
+ * *values* rather than `[key, value]` entries — so `Array.from(game.modules)`
+ * returns bare `Module` objects, not pairs. Going through `.values()`
+ * normalizes that: it yields the packages themselves for a Collection, a
+ * plain Map, or an array alike, so this works against a real world and
+ * against a test double without either having to imitate the other.
  */
 export function getActivePackagesFromGame(gameInstance = globalThis.game) {
-  const modules = Array.from(gameInstance?.modules ?? [])
-    .filter(([, mod]) => mod.active)
-    .map(([, mod]) => toPackageInfo(mod));
+  const source = gameInstance?.modules;
+  const modules = Array.from(source?.values?.() ?? source ?? [])
+    .filter((mod) => mod?.active)
+    .map((mod) => toPackageInfo(mod));
 
   const system = gameInstance?.system;
   return system ? [...modules, toPackageInfo(system, true)] : modules;
