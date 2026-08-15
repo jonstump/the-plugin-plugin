@@ -31,8 +31,15 @@ This module closes that gap.
    (`game.modules`, `game.system`). Compare:
    - installed `version` vs. latest published `version` (update available?)
    - latest published `compatibility.verified` vs. the current Foundry
-     version (target-version detection isn't feasible client-side — see
-     [`docs/research/foundry-version-detection.md`](docs/research/foundry-version-detection.md))
+     version (`game.release`)
+   - latest published `compatibility.verified` vs. `inferredLatest` —
+     `max(compatibility.verified)` across every currently-installed package
+     and the active game system. There is no reliable, credential-free way
+     to ask Foundry itself what the latest core version is (see
+     [`docs/research/foundry-version-detection.md`](docs/research/foundry-version-detection.md)),
+     so this inference is the target-version signal — fully automatic, no
+     GM input, no new network calls. See
+     [`docs/adrs/ADR-0001-infer-newer-foundry-version-from-installed-packages.md`](docs/adrs/ADR-0001-infer-newer-foundry-version-from-installed-packages.md).
    - Fall back to legacy `compatibleCoreVersion` when `compatibility` is
      absent.
    - Handle fetch failures gracefully per-module (CORS-blocked hosts, dead

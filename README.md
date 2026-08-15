@@ -31,15 +31,24 @@ newest Foundry release, doesn't mean it's abandoned — it means nobody's
 gotten to it yet. This module never labels anything "dead", "broken", or
 "abandoned"; at most, "possibly unmaintained."
 
-## Known limitation: no forward-looking version check
+## How we detect a newer Foundry version
 
-There is currently no reliable, unauthenticated, CORS-enabled way to detect
-"the latest available Foundry core version" from inside a running world (see
+There is no reliable, unauthenticated, CORS-enabled way to ask Foundry
+itself "what's the latest core version" from inside a running world — see
 [`docs/research/foundry-version-detection.md`](docs/research/foundry-version-detection.md)
-for what was tried). So compatibility checks compare against the **Foundry
-version you're currently running**, not a hypothetical newer generation. If
-you're on an older core version, this module won't tell you whether a package
-is ready for a newer one you haven't upgraded to yet.
+for what was tried, and
+[`docs/adrs/ADR-0001-infer-newer-foundry-version-from-installed-packages.md`](docs/adrs/ADR-0001-infer-newer-foundry-version-from-installed-packages.md)
+for the full reasoning. So instead of asking foundryvtt.com, this module
+infers it from data it's already fetching: actively-maintained packages
+(especially your game system) tend to bump `compatibility.verified` within
+days of a new Foundry release. The highest `verified` value seen across
+everything you have installed is used as a stand-in for "a newer Foundry
+generation likely exists," and any package whose own `verified` is behind
+that gets flagged.
+
+This is an inference, not a fact. If your entire modlist is equally behind,
+there's no peer signal to go on, and the check simply has nothing to report
+— same as if the check didn't exist, not a false "you're all set."
 
 ## Installation
 
