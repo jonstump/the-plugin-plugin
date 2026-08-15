@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted
 date: 2026-08-15
 decision-makers: Jon Stump
 extends: [ADR-0002]
