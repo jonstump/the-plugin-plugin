@@ -8,6 +8,11 @@ import {
   classifyCompatibility,
   PREVIOUS_VERSIONS_SETTING_KEY,
 } from "./compatibility-classifier.js";
+import {
+  CheckerTableApp,
+  openCheckerTable,
+  PINNED_MODULES_SETTING_KEY,
+} from "./checker-table.js";
 
 const MODULE_ID = "the-plugin-plugin";
 
@@ -24,15 +29,28 @@ Hooks.once("init", () => {
     type: Object,
     default: {},
   });
+
+  // Governing: SPEC-0001 REQ "Pinned Critical Modules" — world-scoped set of
+  // pinned module ids (stored as a plain array; see checker-table.js's
+  // togglePinned/isPinned). Not a GM-facing settings-menu option (it's
+  // toggled from the checker table's per-row pin control), hence
+  // `config: false`.
+  game.settings.register(MODULE_ID, PINNED_MODULES_SETTING_KEY, {
+    scope: "world",
+    config: false,
+    type: Array,
+    default: [],
+  });
 });
 
 // Governing: SPEC-0001 REQ "Manifest Check", SPEC-0001 REQ "Fetch
 // Concurrency and Caching", SPEC-0001 REQ "Inferred Latest Version",
 // SPEC-0001 REQ "Compatibility Severity Classification", SPEC-0001 REQ
-// "Possibly Unmaintained Heuristic" — expose the manifest-fetch pass and the
-// classification layer on the module's API namespace so the checker table
-// (issue #8) and login notification (issue #9) can consume both without
-// re-implementing fetch, cache, or classification logic.
+// "Possibly Unmaintained Heuristic", SPEC-0001 REQ "Checker Table" — expose
+// the manifest-fetch pass, the classification layer, and the checker table
+// window on the module's API namespace so the login notification (issue #9)
+// can open the same checker window (e.g. from its chat message button)
+// without re-implementing fetch, cache, classification, or rendering logic.
 Hooks.once("setup", () => {
   const mod = game.modules.get(MODULE_ID);
   if (mod) {
@@ -42,6 +60,8 @@ Hooks.once("setup", () => {
       DEFAULT_CONCURRENCY,
       classifyActiveCompatibility,
       classifyCompatibility,
+      openCheckerTable,
+      CheckerTableApp,
     };
   }
 });

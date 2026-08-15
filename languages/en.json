@@ -1,3 +1,35 @@
 {
-  "THE-PLUGIN-PLUGIN.Title": "The Plugin Plugin"
+  "THE-PLUGIN-PLUGIN.Title": "The Plugin Plugin",
+
+  "THE-PLUGIN-PLUGIN.Status.UpToDate": "Up to date & verified",
+  "THE-PLUGIN-PLUGIN.Status.UpdateAvailable": "Update available",
+  "THE-PLUGIN-PLUGIN.Status.NotYetVerified": "Not yet verified for current/target Foundry version",
+  "THE-PLUGIN-PLUGIN.Status.PossiblyUnmaintained": "Possibly unmaintained",
+  "THE-PLUGIN-PLUGIN.Status.CouldntCheck": "Couldn't check",
+
+  "THE-PLUGIN-PLUGIN.CheckerTable.Title": "Compatibility Checker",
+  "THE-PLUGIN-PLUGIN.CheckerTable.KindnessReminder": "Module and system developers are volunteers with their own lives outside this project. A lagging or unverified status doesn't mean a package will never be updated — please be patient and kind when reaching out.",
+  "THE-PLUGIN-PLUGIN.CheckerTable.DeveloperDeclaredNote": "Compatibility and version data below is developer-declared (from each package's own manifest), not independently tested.",
+  "THE-PLUGIN-PLUGIN.CheckerTable.Rescan": "Re-check now",
+  "THE-PLUGIN-PLUGIN.CheckerTable.Scanning": "Checking installed packages…",
+  "THE-PLUGIN-PLUGIN.CheckerTable.ScanComplete": "Checked {count} package(s).",
+  "THE-PLUGIN-PLUGIN.CheckerTable.ScanError": "Something went wrong while checking packages. Try again with \"Re-check now\".",
+  "THE-PLUGIN-PLUGIN.CheckerTable.NoPackages": "No active packages to check.",
+  "THE-PLUGIN-PLUGIN.CheckerTable.ResultsRegionLabel": "Compatibility checker results",
+  "THE-PLUGIN-PLUGIN.CheckerTable.ColumnPin": "Pinned",
+  "THE-PLUGIN-PLUGIN.CheckerTable.ColumnPackage": "Package",
+  "THE-PLUGIN-PLUGIN.CheckerTable.ColumnInstalled": "Installed",
+  "THE-PLUGIN-PLUGIN.CheckerTable.ColumnLatest": "Latest",
+  "THE-PLUGIN-PLUGIN.CheckerTable.ColumnVerified": "Verified core version",
+  "THE-PLUGIN-PLUGIN.CheckerTable.ColumnStatus": "Status",
+  "THE-PLUGIN-PLUGIN.CheckerTable.ColumnLinks": "Links",
+  "THE-PLUGIN-PLUGIN.CheckerTable.ColumnReport": "Copy report",
+  "THE-PLUGIN-PLUGIN.CheckerTable.AriaPin": "Pin {title} as a critical module",
+  "THE-PLUGIN-PLUGIN.CheckerTable.AriaUnpin": "Unpin {title} as a critical module",
+  "THE-PLUGIN-PLUGIN.CheckerTable.AriaCopyReport": "Copy bug-report snippet for {title}",
+  "THE-PLUGIN-PLUGIN.CheckerTable.AriaProjectPage": "Open {title}'s project page",
+  "THE-PLUGIN-PLUGIN.CheckerTable.AriaReportIssue": "Report an issue for {title}",
+  "THE-PLUGIN-PLUGIN.CheckerTable.AriaChangelog": "View {title}'s changelog",
+  "THE-PLUGIN-PLUGIN.CheckerTable.CopyReportSuccess": "Bug-report snippet copied to clipboard.",
+  "THE-PLUGIN-PLUGIN.CheckerTable.CopyReportFailure": "Couldn't copy the bug-report snippet to the clipboard."
 }
