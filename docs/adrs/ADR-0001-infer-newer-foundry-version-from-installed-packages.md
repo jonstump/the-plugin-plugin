@@ -6,6 +6,28 @@ decision-makers: Jon Stump
 
 # ADR-0001: Infer a likely-newer Foundry version from installed packages' own manifests
 
+> ## ⚠️ Amended 2026-08-15 — the premise below was factually wrong
+>
+> This ADR was written on research that incorrectly asserted Foundry does not
+> expose the latest core version to a running world. **It does:**
+> `game.data.coreUpdate.version` (measured: `"14.366"` in a world running
+> `13.351`), with no credentials, no CORS, and no fetch by this module.
+>
+> **The decision is therefore revised** — see "Amendment" at the end of this
+> document:
+>
+> - **Primary**: read the latest core version from `game.data.coreUpdate`.
+> - **Fallback**: the peer inference this ADR originally chose
+>   (`inferredLatest`) is retained for when `coreUpdate.couldReachWebsite`
+>   is `false` or the field is absent.
+>
+> The original text is preserved below unedited, because the option analysis
+> (proxy servers, license keys, HTML scraping) remains valid and its
+> rejections still hold. Only the availability premise and the resulting
+> primary mechanism changed. The title is left unchanged so existing
+> references keep resolving, though it now describes the fallback rather
+> than the primary path.
+
 ## Context and Problem Statement
 
 The v1 scope calls for flagging packages that are "not yet verified for
@@ -245,3 +267,83 @@ fetched for the core v1 update check.
 * Revisit if: foundryvtt.com publishes a public, unauthenticated,
   CORS-enabled "latest release" endpoint — the inference becomes
   unnecessary at that point.
+
+## Amendment — 2026-08-15
+
+### What was wrong
+
+The "Context and Problem Statement" above asserts that there is no
+credential-free way to learn the latest core version from inside a running
+world. That is false. Foundry populates `game.data.coreUpdate` in the
+client's own game data:
+
+```js
+game.data.coreUpdate
+// { hasUpdate: false, canUpdate: true, couldReachWebsite: true,
+//   version: "14.366", channel: "stable", willDisableModules: true }
+```
+
+Measured in a live Foundry v13.351 world as GM. The local Node server runs
+the license-authenticated update check and relays the *result* to the
+client. So the license-key barrier described above is real, but it never
+prevented us from learning the answer — only from asking foundryvtt.com
+ourselves, which was never necessary.
+
+The error originated in
+[`docs/research/foundry-version-detection.md`](../research/foundry-version-detection.md),
+which claimed no such field existed in `game.data` without ever enumerating
+`game.data`. That document now carries a Correction section covering the
+evidence and the method failure. The foundryvtt.com CORS findings in it —
+and every option rejection in this ADR — remain valid.
+
+### Revised decision
+
+`inferredLatest` is demoted from primary mechanism to fallback:
+
+1. **Primary — `game.data.coreUpdate.version`.** Authoritative, zero
+   network calls by this module, no credentials. Used whenever
+   `couldReachWebsite` is `true` and `version` is present.
+2. **Fallback — peer inference.** The original mechanism, unchanged, used
+   when the Foundry server could not reach foundryvtt.com (`couldReachWebsite:
+   false`) or the payload is absent. Its "no peer signal" degradation
+   (documented above) still applies.
+
+Two implementation constraints are binding:
+
+- **Compare `coreUpdate.version` against `game.release.version` directly.**
+  Do NOT gate on `coreUpdate.hasUpdate`: it read `false` while `version` read
+  `14.366` on a world running `13.351`, appearing to be scoped to the current
+  generation. Gating on it would suppress exactly the cross-generation signal
+  this project exists to surface.
+- **Treat `couldReachWebsite: false` as "unknown", not as "no update".**
+  Absence of a reachable check is not evidence that the running version is
+  current — the same reasoning this ADR already applies to a missing peer
+  signal.
+
+### What does not change
+
+- The "no server component, no API keys" constraint holds — more strongly,
+  in fact, since the primary path now makes no network request at all.
+- Severity handling per ADR-0002 is unaffected. A target version obtained
+  authoritatively still produces a soft status unless
+  `compatibility.maximum` says otherwise.
+- The rejections of a proxy/relay, license-key collection, HTML scraping,
+  and manual target-version entry all stand.
+
+### Related consequence
+
+`game.data.systemUpdate` similarly exposes the active game system's latest
+version (`{ hasUpdate: true, version: "14.0.2" }` for a system running
+`0.30.1`) with no manifest fetch. This is relevant to SPEC-0002, since the
+game system is one of the packages whose declared manifest URL is
+CORS-blocked — verified independently against the system's GitHub releases,
+which show a renumbering from `0.30.1` to the `14.x` line.
+
+### Follow-up required
+
+SPEC-0001 REQ "Inferred Latest Version" still specifies peer inference as
+*the* mechanism and must be amended to match this primary/fallback split.
+[`design.md`](../openspec/specs/compatibility-checker/design.md) likewise
+restates the incorrect premise. Both are knowingly stale as of this
+amendment and are tracked as follow-up work rather than being changed here,
+so the spec/design pair can be amended together.

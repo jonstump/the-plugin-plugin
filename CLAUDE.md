@@ -32,14 +32,20 @@ This module closes that gap.
    - installed `version` vs. latest published `version` (update available?)
    - latest published `compatibility.verified` vs. the current Foundry
      version (`game.release`)
-   - latest published `compatibility.verified` vs. `inferredLatest` —
+   - latest published `compatibility.verified` vs. the **target version**.
+     The target comes from `game.data.coreUpdate.version`, which Foundry's
+     own server populates in-world — authoritative, no credentials, no
+     fetch by this module. Compare it against `game.release.version`
+     directly; do **not** gate on `coreUpdate.hasUpdate`, which is scoped to
+     the current generation and reads `false` even when a newer generation
+     exists. When `coreUpdate.couldReachWebsite` is `false` or the payload
+     is absent, fall back to `inferredLatest` —
      `max(compatibility.verified)` across every currently-installed package
-     and the active game system. There is no reliable, credential-free way
-     to ask Foundry itself what the latest core version is (see
-     [`docs/research/foundry-version-detection.md`](docs/research/foundry-version-detection.md)),
-     so this inference is the target-version signal — fully automatic, no
-     GM input, no new network calls. See
-     [`docs/adrs/ADR-0001-infer-newer-foundry-version-from-installed-packages.md`](docs/adrs/ADR-0001-infer-newer-foundry-version-from-installed-packages.md).
+     and the active game system. See
+     [`docs/adrs/ADR-0001-infer-newer-foundry-version-from-installed-packages.md`](docs/adrs/ADR-0001-infer-newer-foundry-version-from-installed-packages.md)
+     (amended 2026-08-15 — earlier revisions of this file and of
+     [`docs/research/foundry-version-detection.md`](docs/research/foundry-version-detection.md)
+     wrongly claimed no such field existed).
    - Fall back to legacy `compatibleCoreVersion` when `compatibility` is
      absent.
    - Handle fetch failures gracefully per-module (CORS-blocked hosts, dead
