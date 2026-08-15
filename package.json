@@ -5,5 +5,8 @@
   "description": "Unit tests for The Plugin Plugin's pure logic (no build step, no bundler — Node's built-in test runner only).",
   "scripts": {
     "test": "node --test"
+  },
+  "devDependencies": {
+    "handlebars": "^4.7.9"
   }
 }

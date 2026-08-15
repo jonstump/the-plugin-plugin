@@ -309,7 +309,11 @@ let activeInstance = null;
  *   Defaults to whatever currently has focus.
  */
 export async function openCheckerTable(triggerElement = globalThis.document?.activeElement ?? null) {
-  if (!game.user?.isGM) return null;
+  // `globalThis.game` (not a bare `game` reference) so this gate degrades to
+  // "not a GM" — never a thrown ReferenceError — when no world is loaded at
+  // all, matching the defensive-default pattern the rest of this file
+  // already uses for `getPinnedModuleIds`/`buildReportContext`.
+  if (!globalThis.game?.user?.isGM) return null;
   if (!activeInstance) {
     activeInstance = new CheckerTableApp();
   }
