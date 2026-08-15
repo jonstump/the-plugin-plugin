@@ -185,6 +185,17 @@ concurrently.
   not restating SPEC-0001's requirements, only stating how the fallback
   interacts with them. `/sdd:check` and `/sdd:audit` are the backstop.
 
+  One such misalignment was found and resolved during review of this spec,
+  and is worth recording as the pattern to expect: SPEC-0001 states the
+  system "MUST NOT re-fetch a package's manifest ... more than once per
+  session." Read literally, a fallback attempt is a second request for the
+  same package and would violate that MUST NOT — even though SPEC-0001's
+  own scenario makes clear the clause is about repeated checks across
+  window opens, not attempts within one check. Left implicit, this would
+  surface later as a false-positive CRITICAL drift finding against an
+  approved spec. REQ "Concurrency and Caching Interaction" now states the
+  scoping explicitly rather than relying on a reader inferring intent.
+
 ## Migration Plan
 
 Additive. No stored data changes shape, and no GM-facing setting is added.

@@ -220,6 +220,13 @@ and Caching" rather than outside it.
   provenance.
 - Fallback requests MUST honor cancellation on the same signal as
   declared-URL requests.
+- SPEC-0001's constraint that the system "MUST NOT re-fetch a package's
+  manifest ... more than once per session" governs repeated *checks* across
+  checker-window opens — the case its own "Re-check within the same
+  session" scenario describes. It does not cap the number of HTTP attempts
+  within a single check. A declared-URL attempt and its fallback together
+  constitute **one** check of that package, and MUST NOT be counted as two
+  for the purposes of that constraint.
 
 #### Scenario: Concurrency cap holds under fallback load
 
