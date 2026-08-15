@@ -15,6 +15,7 @@
   ],
   "esmodules": [
     "scripts/manifest-fetcher.js",
+    "scripts/compatibility-classifier.js",
     "scripts/the-plugin-plugin.js"
   ],
   "styles": [

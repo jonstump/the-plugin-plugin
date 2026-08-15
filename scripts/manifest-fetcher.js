@@ -114,6 +114,10 @@ function errorResult(pkg, message) {
     updateAvailable: null,
     verified: null,
     compatibility: null,
+    // Governing: SPEC-0001 REQ "Checker Table", SPEC-0001 REQ "Possibly
+    // Unmaintained Heuristic" — link-out fields, null when the manifest
+    // couldn't be fetched at all.
+    links: null,
     status: "error",
     // Governing: SPEC-0001 REQ "Error Handling Standards" — every failure is
     // attributable to the specific package it occurred for.
@@ -154,6 +158,16 @@ function buildOkResult(pkg, manifest) {
       maximum: manifest?.compatibility?.maximum ?? null,
       minimum: manifest?.compatibility?.minimum ?? null,
       compatibleCoreVersion,
+    },
+    // Governing: SPEC-0001 REQ "Checker Table" (link-out buttons, issue #8),
+    // SPEC-0001 REQ "Possibly Unmaintained Heuristic" (issue #7 needs `url`/
+    // `bugs` to detect a GitHub-hosted repo for the archived-repo check).
+    // Sourced from the *fetched* manifest, same object already parsed above
+    // — no new network call.
+    links: {
+      url: manifest?.url ?? null,
+      bugs: manifest?.bugs ?? null,
+      changelog: manifest?.changelog ?? null,
     },
     status: "ok",
     error: null,
