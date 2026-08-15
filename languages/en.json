@@ -31,5 +31,15 @@
   "THE-PLUGIN-PLUGIN.CheckerTable.AriaReportIssue": "Report an issue for {title}",
   "THE-PLUGIN-PLUGIN.CheckerTable.AriaChangelog": "View {title}'s changelog",
   "THE-PLUGIN-PLUGIN.CheckerTable.CopyReportSuccess": "Bug-report snippet copied to clipboard.",
-  "THE-PLUGIN-PLUGIN.CheckerTable.CopyReportFailure": "Couldn't copy the bug-report snippet to the clipboard."
+  "THE-PLUGIN-PLUGIN.CheckerTable.CopyReportFailure": "Couldn't copy the bug-report snippet to the clipboard.",
+
+  "THE-PLUGIN-PLUGIN.Settings.NotificationFrequency.Name": "Login Notification Frequency",
+  "THE-PLUGIN-PLUGIN.Settings.NotificationFrequency.Hint": "How often The Plugin Plugin should notify you about compatibility check results when you log in as GM.",
+  "THE-PLUGIN-PLUGIN.Settings.NotificationFrequency.Choices.EveryLogin": "Every login",
+  "THE-PLUGIN-PLUGIN.Settings.NotificationFrequency.Choices.Daily": "Daily",
+  "THE-PLUGIN-PLUGIN.Settings.NotificationFrequency.Choices.OnlyWhenChanged": "Only when results changed",
+  "THE-PLUGIN-PLUGIN.LoginNotification.Summary": "Checked {total} active package(s): {upToDate} up to date, {updatesAvailable} with updates available, {issues} needing attention, {unmaintained} possibly unmaintained, {couldntCheck} couldn't be checked.",
+  "THE-PLUGIN-PLUGIN.LoginNotification.OpenChecker": "Open Compatibility Checker",
+  "THE-PLUGIN-PLUGIN.LoginNotification.ToastWarning": "One or more pinned modules may have a compatibility problem. Open the compatibility checker to review.",
+  "THE-PLUGIN-PLUGIN.LoginNotification.VolunteerReminder": "Remember: module developers are volunteers. A lagging or unverified status doesn't mean a package will never be updated."
 }
