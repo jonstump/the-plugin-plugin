@@ -36,22 +36,29 @@ gotten to it yet. This module never labels anything "dead", "broken", or
 
 ## How we detect a newer Foundry version
 
-There is no reliable, unauthenticated, CORS-enabled way to ask Foundry
-itself "what's the latest core version" from inside a running world — see
-[`docs/research/foundry-version-detection.md`](docs/research/foundry-version-detection.md)
-for what was tried, and
-[`docs/adrs/ADR-0001-infer-newer-foundry-version-from-installed-packages.md`](docs/adrs/ADR-0001-infer-newer-foundry-version-from-installed-packages.md)
-for the full reasoning. So instead of asking foundryvtt.com, this module
-infers it from data it's already fetching: actively-maintained packages
-(especially your game system) tend to bump `compatibility.verified` within
-days of a new Foundry release. The highest `verified` value seen across
-everything you have installed is used as a stand-in for "a newer Foundry
-generation likely exists," and any package whose own `verified` is behind
-that gets flagged.
+Your Foundry server already checks for core updates and hands the result to
+the browser, so this module reads it straight from your running world —
+no request to foundryvtt.com, no license key, nothing to configure. That
+gives an authoritative "the latest Foundry version is X," not a guess.
 
-This is an inference, not a fact. If your entire modlist is equally behind,
-there's no peer signal to go on, and the check simply has nothing to report
-— same as if the check didn't exist, not a false "you're all set."
+If your server couldn't reach foundryvtt.com (offline, firewalled, or the
+check failed), the module falls back to inferring a target version from your
+own installed packages: actively-maintained packages, especially your game
+system, tend to bump `compatibility.verified` within days of a new Foundry
+release, so the highest `verified` value across everything you have
+installed stands in for "a newer Foundry generation likely exists."
+
+That fallback is an inference, not a fact. If your entire modlist is equally
+behind, there's no peer signal to go on, and the check simply has nothing to
+report — same as if the check didn't exist, not a false "you're all set."
+
+See
+[`docs/adrs/ADR-0001-infer-newer-foundry-version-from-installed-packages.md`](docs/adrs/ADR-0001-infer-newer-foundry-version-from-installed-packages.md)
+for the reasoning, and
+[`docs/research/foundry-version-detection.md`](docs/research/foundry-version-detection.md)
+for what was tried. Note both documents originally concluded, incorrectly,
+that the latest version was undiscoverable client-side; each now carries a
+dated correction explaining what was wrong.
 
 ## Installation
 
