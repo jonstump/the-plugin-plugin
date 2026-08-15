@@ -67,7 +67,11 @@ This module closes that gap.
    - A whispered **chat message** summarizing results, with buttons/links to
      open the checker. Persists in the chat log.
    - Additionally a `ui.notifications.warn` toast **only** when a pinned
-     critical module has a problem.
+     critical module has a problem. "Has a problem" means a hard-severity
+     compatibility status (`compatibility.maximum` declared and below the
+     comparison target) or the "possibly unmaintained" heuristic — never a
+     bare `compatibility.verified` lag on its own. See
+     [`docs/adrs/ADR-0002-severity-by-declared-maximum-not-just-verified-lag.md`](docs/adrs/ADR-0002-severity-by-declared-maximum-not-just-verified-lag.md).
    - Frequency setting: every login / daily / only when results changed
      (default: only when changed — compare a hash of results stored in a
      world setting).
