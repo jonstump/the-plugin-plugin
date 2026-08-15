@@ -363,3 +363,60 @@ test("getActivePackagesFromGame filters to active modules and includes the syste
   assert.ok(system);
   assert.equal(system.isSystem, true);
 });
+
+// Regression test for a bug found only by running in a real Foundry v13
+// world: `game.modules` is a Foundry `Collection`, which extends Map but
+// overrides Symbol.iterator to yield *values* instead of [key, value]
+// entries. The plain `Map` used by the test above iterates entries, so a
+// pair-destructuring implementation passed against the Map double while
+// throwing "object is not iterable" against a real world. This double
+// imitates Collection's actual iteration order-of-yield so that mismatch
+// can't come back unnoticed.
+class FakeCollection extends Map {
+  *[Symbol.iterator]() {
+    yield* this.values();
+  }
+}
+
+test("getActivePackagesFromGame handles a Foundry Collection (yields values, not entries)", () => {
+  const fakeGame = {
+    modules: new FakeCollection([
+      [
+        "mod-a",
+        {
+          id: "mod-a",
+          title: "Mod A",
+          active: true,
+          version: "1.0.0",
+          manifest: "https://example.com/mod-a.json",
+        },
+      ],
+      [
+        "mod-b",
+        {
+          id: "mod-b",
+          title: "Mod B",
+          active: false,
+          version: "1.0.0",
+          manifest: "https://example.com/mod-b.json",
+        },
+      ],
+    ]),
+    system: {
+      id: "sfrpg",
+      title: "Starfinder",
+      version: "0.30.1",
+      manifest: "https://example.com/sfrpg.json",
+    },
+  };
+
+  const packages = getActivePackagesFromGame(fakeGame);
+
+  assert.equal(packages.length, 2);
+  const modA = packages.find((p) => p.id === "mod-a");
+  assert.ok(modA, "active module should be picked up from a Collection");
+  assert.equal(modA.installedVersion, "1.0.0");
+  assert.equal(modA.manifestUrl, "https://example.com/mod-a.json");
+  assert.ok(!packages.some((p) => p.id === "mod-b"), "inactive module excluded");
+  assert.equal(packages.find((p) => p.id === "sfrpg")?.isSystem, true);
+});
