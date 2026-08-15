@@ -177,12 +177,21 @@ Greenfield — no prior version of this capability exists in this repo.
 
 ## Open Questions
 
-- What is the right concurrency-limit number for manifest fetches? Needs a
-  concrete default (e.g., 5–8 in-flight) chosen during implementation and
-  validated against a realistic large-modlist GM setup.
-- Should the frequency-setting comparison hash include soft-severity
-  packages, or only hard-severity + unmaintained, so that a purely
-  soft-severity-only change doesn't trigger a "results changed"
-  notification under the default frequency setting? Not resolved by
-  ADR-0001 or ADR-0002 — worth deciding before `/sdd:plan` breaks this
-  into issues.
+None remaining — both questions raised during design have been resolved
+during implementation (see "Resolved Questions" below).
+
+## Resolved Questions
+
+- **What is the right concurrency-limit number for manifest fetches?**
+  Resolved as `DEFAULT_CONCURRENCY = 6` in `scripts/manifest-fetcher.js`
+  (issue #6 / PR #11). Rationale documented inline at that constant's
+  definition.
+- **Should the frequency-setting comparison hash include soft-severity
+  packages, or only hard-severity + unmaintained?** Resolved: the hash
+  includes every field the chat summary itself reports, i.e. all
+  severities, not just the toast-eligible subset — "the results changed"
+  means everything the notification describes. Implemented in
+  `hashResults` in `scripts/login-notification.js` (issue #9 / PR #13);
+  rationale documented in that function's docstring. The toast's own
+  gating remains separately governed by `shouldShowToast`/ADR-0002
+  regardless of what the hash includes.
