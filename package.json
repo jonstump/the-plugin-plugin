@@ -1,0 +1,9 @@
+{
+  "name": "the-plugin-plugin",
+  "private": true,
+  "type": "module",
+  "description": "Unit tests for The Plugin Plugin's pure logic (no build step, no bundler — Node's built-in test runner only).",
+  "scripts": {
+    "test": "node --test"
+  }
+}
