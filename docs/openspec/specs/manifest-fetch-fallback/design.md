@@ -83,13 +83,24 @@ misdiagnosed as "the fallback just doesn't work for systems."
 **Choice**: Include `compatibility.verified` from fallback-sourced
 manifests when computing `inferredLatest`.
 
-**Rationale**: Excluding them would preserve the exact failure this work
-exists to fix. In the measured world, `lib-wrapper` and `smarttarget` both
-declare `verified: 14` against a world running 13.351; both are only
-reachable via the fallback. Excluded, `inferredLatest` stays `null` and
-ADR-0001's inference never runs. Included, it resolves to 14 — corroborated
-independently by the Foundry server log announcing
-`Core software stable update 14.366 is available!`.
+**Rationale**: Consistency — once a manifest has been resolved, the source
+it came from should not change how its `verified` value is treated.
+Excluding fallback-sourced values would make the peer signal depend on
+which packages happened to have CORS-friendly manifest URLs, which is
+unrelated to how current those packages are.
+
+> **Amended 2026-08-15.** This rationale originally argued that excluding
+> these values "would preserve the exact failure this work exists to fix,"
+> because `inferredLatest` would stay `null` and ADR-0001's inference would
+> never run. That framing was correct when written but is now overstated:
+> ADR-0001 has since been amended, and the comparison target normally comes
+> from `game.data.coreUpdate.version` — authoritative, and needing no
+> manifest data at all. Peer inference is now the *fallback*, used only
+> when Foundry's own update check was unreachable. So this requirement
+> still matters, but it improves a fallback path rather than rescuing the
+> primary one. The measured example still holds: `lib-wrapper` and
+> `smarttarget` both declare `verified: 14` and are only reachable via the
+> fallback.
 
 The accuracy objection (default-branch values may be aspirational) is
 already absorbed by two accepted decisions: ADR-0001 frames
@@ -99,8 +110,9 @@ on `verified`. A slightly optimistic `verified` therefore cannot, on its
 own, escalate a notification.
 
 **Alternatives considered**:
-- Exclude fallback values from `inferredLatest`: rejected — leaves ADR-0001
-  starved, which is the status quo this capability was written to end.
+- Exclude fallback values from `inferredLatest`: rejected — makes the peer
+  signal depend on an irrelevant property (manifest-host CORS policy)
+  rather than on package currency.
 - Include them but discount them (e.g. require two corroborating peers):
   rejected as premature — ADR-0002's severity gate already prevents a
   single optimistic peer from causing user-visible alarm, so a second
