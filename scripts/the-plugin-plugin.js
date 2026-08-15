@@ -13,6 +13,11 @@ import {
   openCheckerTable,
   PINNED_MODULES_SETTING_KEY,
 } from "./checker-table.js";
+import {
+  registerLoginNotificationSettings,
+  registerCheckerOpenClickListener,
+  runLoginNotification,
+} from "./login-notification.js";
 
 const MODULE_ID = "the-plugin-plugin";
 
@@ -41,6 +46,18 @@ Hooks.once("init", () => {
     type: Array,
     default: [],
   });
+
+  // Governing: SPEC-0001 REQ "Login Notification" — frequency setting plus
+  // its internal bookkeeping (last-seen results hash, last-notified time).
+  registerLoginNotificationSettings(game);
+});
+
+// Governing: SPEC-0001 REQ "Login Notification" — GM-only whispered chat
+// summary on `ready`, escalating to a toast only for pinned modules with a
+// hard-severity status or the "possibly unmaintained" flag (ADR-0002).
+Hooks.once("ready", () => {
+  registerCheckerOpenClickListener();
+  runLoginNotification();
 });
 
 // Governing: SPEC-0001 REQ "Manifest Check", SPEC-0001 REQ "Fetch

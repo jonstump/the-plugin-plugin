@@ -18,6 +18,7 @@
     "scripts/compatibility-classifier.js",
     "scripts/checker-table-logic.js",
     "scripts/checker-table.js",
+    "scripts/login-notification.js",
     "scripts/the-plugin-plugin.js"
   ],
   "styles": [
