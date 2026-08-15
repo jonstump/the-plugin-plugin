@@ -1,1 +1,107 @@
-/* Styles for The Plugin Plugin will go here. */
+/* Styles for The Plugin Plugin.
+ *
+ * Governing: SPEC-0001 REQ "Checker Table", ADR-0002 (hard vs. soft
+ * severity visual treatment — hard escalates, soft stays quiet).
+ */
+
+.the-plugin-plugin-checker-table {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  height: 100%;
+}
+
+.the-plugin-plugin-checker-table .kindness-reminder {
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--color-border-light-tertiary, #7a7971);
+  border-radius: 4px;
+  background: var(--color-bg-option, rgba(0, 0, 0, 0.05));
+  font-style: italic;
+}
+
+.the-plugin-plugin-checker-table .developer-declared-note {
+  margin: 0;
+  font-size: var(--font-size-12, 12px);
+  opacity: 0.8;
+}
+
+.the-plugin-plugin-checker-table .checker-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.the-plugin-plugin-checker-table .checker-table-region {
+  flex: 1;
+  overflow: auto;
+}
+
+.the-plugin-plugin-checker-table table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.the-plugin-plugin-checker-table th,
+.the-plugin-plugin-checker-table td {
+  padding: 0.35rem 0.5rem;
+  text-align: left;
+  vertical-align: middle;
+  border-bottom: 1px solid var(--color-border-light-tertiary, #c9c7b8);
+}
+
+.the-plugin-plugin-checker-table .col-links a,
+.the-plugin-plugin-checker-table .pin-toggle,
+.the-plugin-plugin-checker-table .col-report button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-right: 0.25rem;
+  cursor: pointer;
+}
+
+.the-plugin-plugin-checker-table .pin-toggle.pinned {
+  color: var(--color-level-warning, #f1a325);
+}
+
+/* Governing: ADR-0002 — hard severity is visually escalated (bold text,
+ * stronger accent color/border) relative to soft severity, which stays
+ * visually quiet, even though both render the identical "Not yet
+ * verified..." label text (the taxonomy has no separate hard-severity
+ * label). Soft severity gets no special styling beyond the default row. */
+.the-plugin-plugin-checker-table .package-row.severity-hard {
+  border-left: 3px solid var(--color-level-error, #c53131);
+}
+
+.the-plugin-plugin-checker-table .status-badge.severity-hard {
+  font-weight: bold;
+  color: var(--color-level-error, #c53131);
+}
+
+.the-plugin-plugin-checker-table .status-badge.severity-soft {
+  color: var(--color-level-warning, #8a6d10);
+}
+
+.the-plugin-plugin-checker-table tr.status-possiblyUnmaintained .status-badge {
+  font-weight: bold;
+}
+
+.the-plugin-plugin-checker-table .empty-row td {
+  text-align: center;
+  font-style: italic;
+  padding: 1rem;
+}
+
+/* Visually hidden but available to screen readers — used for column headers
+ * that are otherwise conveyed by icon-only controls in that column. */
+.the-plugin-plugin-checker-table .visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}

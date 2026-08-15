@@ -1,0 +1,107 @@
+{{! Governing: SPEC-0001 REQ "Checker Table", SPEC-0001 REQ "Pinned Critical
+    Modules", SPEC-0001 REQ "Copy Report Button", SPEC-0001 "Accessibility
+    Requirements", ADR-0002. Rendered by scripts/checker-table.js
+    (CheckerTableApp). }}
+<div class="the-plugin-plugin-checker-table">
+
+  {{! Governing: SPEC-0001 REQ "Checker Table" — "The window MUST display a
+      visible reminder that package developers are volunteers and that a
+      lagging or unverified status does not mean a package will never be
+      updated." CLAUDE.md project rule 1. Always visible, not dismissible. }}
+  <p class="kindness-reminder">
+    <i class="fa-solid fa-heart" aria-hidden="true"></i>
+    {{kindnessReminder}}
+  </p>
+
+  <p class="developer-declared-note">{{developerDeclaredNote}}</p>
+
+  <div class="checker-toolbar">
+    <button type="button" data-action="rescan">
+      <i class="fa-solid fa-arrows-rotate" aria-hidden="true"></i>
+      {{localize "THE-PLUGIN-PLUGIN.CheckerTable.Rescan"}}
+    </button>
+    {{! Governing: SPEC-0001 "Accessibility Requirements" § Dynamic Content
+        Regions — aria-live="polite" status text. }}
+    <span class="scan-status" aria-live="polite">{{scanStatusMessage}}</span>
+  </div>
+
+  {{! Governing: SPEC-0001 "Accessibility Requirements" § ARIA Landmarks —
+      role="main" on the results table region. }}
+  <div role="main" aria-label="{{resultsRegionLabel}}" class="checker-table-region">
+    <table>
+      <thead>
+        <tr>
+          <th class="col-pin">
+            <span class="visually-hidden">{{localize "THE-PLUGIN-PLUGIN.CheckerTable.ColumnPin"}}</span>
+          </th>
+          <th class="col-package">{{localize "THE-PLUGIN-PLUGIN.CheckerTable.ColumnPackage"}}</th>
+          <th class="col-installed">{{localize "THE-PLUGIN-PLUGIN.CheckerTable.ColumnInstalled"}}</th>
+          <th class="col-latest">{{localize "THE-PLUGIN-PLUGIN.CheckerTable.ColumnLatest"}}</th>
+          <th class="col-verified">{{localize "THE-PLUGIN-PLUGIN.CheckerTable.ColumnVerified"}}</th>
+          <th class="col-status">{{localize "THE-PLUGIN-PLUGIN.CheckerTable.ColumnStatus"}}</th>
+          <th class="col-links">{{localize "THE-PLUGIN-PLUGIN.CheckerTable.ColumnLinks"}}</th>
+          <th class="col-report">
+            <span class="visually-hidden">{{localize "THE-PLUGIN-PLUGIN.CheckerTable.ColumnReport"}}</span>
+          </th>
+        </tr>
+      </thead>
+      <tbody>
+        {{#each rows as |row|}}
+        <tr class="package-row severity-{{row.severityClass}} status-{{row.statusLabelKey}}">
+          <td class="col-pin">
+            <button type="button"
+                    class="pin-toggle {{#if row.isPinned}}pinned{{/if}}"
+                    data-action="togglePin"
+                    data-module-id="{{row.id}}"
+                    aria-pressed="{{row.isPinned}}"
+                    aria-label="{{row.ariaLabels.pin}}">
+              <i class="fa-{{#if row.isPinned}}solid{{else}}regular{{/if}} fa-star" aria-hidden="true"></i>
+            </button>
+          </td>
+          <td class="col-package">{{row.title}}</td>
+          <td class="col-installed">{{row.installedVersion}}</td>
+          <td class="col-latest">{{row.latestVersion}}</td>
+          <td class="col-verified">{{row.verified}}</td>
+          <td class="col-status">
+            <span class="status-badge severity-{{row.severityClass}}">{{row.statusLabel}}</span>
+          </td>
+          <td class="col-links">
+            {{#if row.links.url}}
+            <a href="{{row.links.url}}" target="_blank" rel="noopener noreferrer" aria-label="{{row.ariaLabels.url}}">
+              <i class="fa-solid fa-arrow-up-right-from-square" aria-hidden="true"></i>
+            </a>
+            {{/if}}
+            {{#if row.links.issue}}
+            <a href="{{row.links.issue}}" target="_blank" rel="noopener noreferrer" aria-label="{{row.ariaLabels.issue}}">
+              <i class="fa-solid fa-bug" aria-hidden="true"></i>
+            </a>
+            {{/if}}
+            {{#if row.links.changelog}}
+            <a href="{{row.links.changelog}}" target="_blank" rel="noopener noreferrer" aria-label="{{row.ariaLabels.changelog}}">
+              <i class="fa-solid fa-clock-rotate-left" aria-hidden="true"></i>
+            </a>
+            {{/if}}
+          </td>
+          <td class="col-report">
+            <button type="button" data-action="copyReport" data-module-id="{{row.id}}" aria-label="{{row.ariaLabels.copy}}">
+              <i class="fa-solid fa-copy" aria-hidden="true"></i>
+            </button>
+          </td>
+        </tr>
+        {{else}}
+        <tr class="empty-row">
+          <td colspan="8">
+            {{#if loading}}
+              {{localize "THE-PLUGIN-PLUGIN.CheckerTable.Scanning"}}
+            {{else if scanError}}
+              {{localize "THE-PLUGIN-PLUGIN.CheckerTable.ScanError"}}
+            {{else}}
+              {{localize "THE-PLUGIN-PLUGIN.CheckerTable.NoPackages"}}
+            {{/if}}
+          </td>
+        </tr>
+        {{/each}}
+      </tbody>
+    </table>
+  </div>
+</div>

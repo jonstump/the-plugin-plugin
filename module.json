@@ -16,6 +16,8 @@
   "esmodules": [
     "scripts/manifest-fetcher.js",
     "scripts/compatibility-classifier.js",
+    "scripts/checker-table-logic.js",
+    "scripts/checker-table.js",
     "scripts/the-plugin-plugin.js"
   ],
   "styles": [
