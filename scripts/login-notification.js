@@ -234,14 +234,17 @@ export const LAST_NOTIFIED_AT_SETTING_KEY = "lastLoginNotificationAt";
 
 // Governing: SPEC-0001 REQ "Pinned Critical Modules" — that setting is
 // issue #8's scope, not this issue's. Judgment call: rather than this file
-// also calling `game.settings.register` for `pinnedModules` (which would
-// throw a duplicate-registration error once both branches are merged,
+// also calling `game.settings.register` for `pinnedCriticalModules` (which
+// would throw a duplicate-registration error once both branches are merged,
 // since Foundry doesn't allow re-registering the same module/key pair),
 // this reads the setting defensively and treats "not registered yet" the
 // same as "registered but empty" — both mean "no pinned modules," which is
 // already the correct default behavior (no toast fires until a GM has
-// pinned something). No fallback registration needed.
-export const PINNED_MODULES_SETTING_KEY = "pinnedModules";
+// pinned something). No fallback registration needed. Key name matches
+// issue #8's actual registration (`PINNED_MODULES_SETTING_KEY` in
+// scripts/checker-table.js) — kept in sync during /sdd:work's post-PR
+// cross-check since these two stories were implemented in parallel.
+export const PINNED_MODULES_SETTING_KEY = "pinnedCriticalModules";
 
 // data-action value read by the delegated click listener below, and
 // written into the chat card's button by `postChatSummary`.
@@ -250,7 +253,7 @@ const CHECKER_OPEN_ACTION = "the-plugin-plugin-open-checker";
 /**
  * Registers this file's world-scoped settings. Additive alongside
  * the-plugin-plugin.js's existing `init` hook registration — does not
- * touch `pinnedModules` (see judgment-call comment above).
+ * touch `pinnedCriticalModules` (see judgment-call comment above).
  *
  * Governing: SPEC-0001 REQ "Login Notification".
  */
@@ -345,7 +348,7 @@ function readPinnedModuleIds(gameInstance) {
  * `ChatMessage.create` (standard behavior — persists in the chat log like
  * any other message). Includes a button wired to the delegated click
  * listener below, which defensively no-ops if issue #8's
- * `api.openCheckerWindow` isn't available yet.
+ * `api.openCheckerTable` isn't available yet.
  *
  * Governing: SPEC-0001 REQ "Login Notification" ("whispered chat message
  * ... with buttons or links to open the checker window ... MUST persist in
@@ -385,10 +388,12 @@ async function postChatSummary(gameInstance, summary) {
  * Delegated click listener for the chat card's "open checker" button.
  * Delegated (attached once, to `document`) rather than attached per-message,
  * since chat messages render independently of when this module's `ready`
- * hook runs. Calls `api.openCheckerWindow` defensively via optional
+ * hook runs. Calls `api.openCheckerTable` defensively via optional
  * chaining — issue #8 (the checker window) may not have merged yet, in
  * which case the button still renders but silently does nothing when
- * clicked, per the coordination convention documented in this PR.
+ * clicked, per the coordination convention documented in this PR. Name
+ * matches issue #8's actual export (`openCheckerTable` in
+ * scripts/checker-table.js).
  *
  * Governing: SPEC-0001 REQ "Login Notification".
  */
@@ -399,7 +404,7 @@ export function registerCheckerOpenClickListener(
   doc?.addEventListener("click", (event) => {
     const trigger = event.target?.closest?.(`[data-action="${CHECKER_OPEN_ACTION}"]`);
     if (!trigger) return;
-    gameInstance?.modules?.get(MODULE_ID)?.api?.openCheckerWindow?.();
+    gameInstance?.modules?.get(MODULE_ID)?.api?.openCheckerTable?.();
   });
 }
 
