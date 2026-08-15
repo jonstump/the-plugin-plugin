@@ -1,0 +1,44 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Derive version from tag
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Stamp module.json with release URLs
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          jq \
+            --arg version "$VERSION" \
+            --arg manifest "https://github.com/${{ github.repository }}/releases/latest/download/module.json" \
+            --arg download "https://github.com/${{ github.repository }}/releases/download/$TAG/module.zip" \
+            '.version = $version | .manifest = $manifest | .download = $download' \
+            module.json > module.json.tmp
+          mv module.json.tmp module.json
+
+      - name: Build module.zip
+        run: |
+          zip -r module.zip module.json README.md LICENSE CHANGELOG.md \
+            scripts/ templates/ styles/ languages/
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            module.json
+            module.zip
+          generate_release_notes: true
