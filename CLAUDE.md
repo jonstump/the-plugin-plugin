@@ -90,10 +90,15 @@ This module closes that gap.
 ### "Possibly unmaintained" heuristic (label it exactly that, never "dead")
 
 Flag only when BOTH: the latest published manifest verifies neither the
-current nor a newer Foundry generation, AND the manifest's declared version
-has not changed across checks / the GitHub repo is archived (GitHub API
-`archived` field, unauthenticated — respect rate limits, treat API failure as
-"unknown", and only call it for packages already failing the verified check).
+current nor a newer Foundry generation, AND the GitHub repo is archived or
+has had no pushed activity for at least 12 months (GitHub API `archived` and
+`pushed_at` fields, read from a single unauthenticated request — respect
+rate limits, treat API failure as "unknown", and only call it for packages
+already failing the verified check). Activity age is measured from
+`pushed_at`, never `updated_at`, and never from whether a manifest version
+changed between checks — that signal fired on any two checks close together
+regardless of real staleness (issue #22); see
+[`docs/adrs/ADR-0004-bound-unmaintained-signal-by-repository-activity-age.md`](docs/adrs/ADR-0004-bound-unmaintained-signal-by-repository-activity-age.md).
 
 ## Technical constraints
 
