@@ -28,6 +28,7 @@
   "THE-PLUGIN-PLUGIN.CheckerTable.ColumnStatus": "Status",
   "THE-PLUGIN-PLUGIN.CheckerTable.ColumnLinks": "Links",
   "THE-PLUGIN-PLUGIN.CheckerTable.ColumnReport": "Copy report",
+  "THE-PLUGIN-PLUGIN.CheckerTable.ProvenanceFallbackNote": "Read from the repository's default branch, not a published release.",
   "THE-PLUGIN-PLUGIN.CheckerTable.AriaPin": "Pin {title} as a critical module",
   "THE-PLUGIN-PLUGIN.CheckerTable.AriaUnpin": "Unpin {title} as a critical module",
   "THE-PLUGIN-PLUGIN.CheckerTable.AriaCopyReport": "Copy bug-report snippet for {title}",

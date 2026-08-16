@@ -47,3 +47,28 @@ test("languages/en.json includes a visible kindness reminder string", () => {
   assert.ok(reminder && reminder.length > 0);
   assert.match(reminder.toLowerCase(), /volunteer/);
 });
+
+// --- Requirement: Result Provenance (SPEC-0002) -----------------------------
+
+test("languages/en.json defines the fallback-provenance note string, non-empty", () => {
+  const note = strings["THE-PLUGIN-PLUGIN.CheckerTable.ProvenanceFallbackNote"];
+  assert.ok(note && note.length > 0);
+});
+
+test("the fallback-provenance note never claims fallback data is the latest published/released version (SPEC-0002 REQ \"Result Provenance\")", () => {
+  const note = strings["THE-PLUGIN-PLUGIN.CheckerTable.ProvenanceFallbackNote"].toLowerCase();
+  assert.ok(!note.includes("latest published"));
+  assert.ok(!note.includes("latest release"));
+  assert.ok(!/\breleased\b/.test(note));
+});
+
+test("the fallback-provenance note carries no blame language (behind/neglected/at fault) — CLAUDE.md project rule 1", () => {
+  const note = strings["THE-PLUGIN-PLUGIN.CheckerTable.ProvenanceFallbackNote"].toLowerCase();
+  // Word-boundary match, not a bare substring check — "default" (as in
+  // "default branch", the correct/expected term here) legitimately contains
+  // the substring "fault", so a plain .includes("fault") would false-positive.
+  for (const word of ["behind", "neglect", "fault", "outdated", "stale"]) {
+    const re = new RegExp(`\\b${word}`);
+    assert.ok(!re.test(note), `provenance note contains blame-adjacent word "${word}"`);
+  }
+});
