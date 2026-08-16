@@ -192,6 +192,56 @@ consumer was the frozen-version comparison.
 - Require `archived` alone: rejected — most dormant projects are never
   archived, so the heuristic would almost never fire.
 
+### The login notification answers "does this need me?", the window answers "what exactly?"
+
+**Choice**: The chat summary itemises per-status counts, states the running
+Foundry version and the active comparison target, and names any pinned
+module that is not clean. It does not repeat the checker window's volunteer
+reminder.
+
+**Rationale**: The two surfaces have different jobs, and the original
+notification blurred them. It packed every count into one prose sentence
+(unreadable at a glance), omitted the version context entirely (so a GM
+could not tell what upgrade the results were measured against), and spent
+two of its four lines on a reminder the GM would see again the moment they
+opened the window.
+
+Pinning was the sharpest omission: the notification used it only as a
+binary toast trigger, so a GM who had deliberately marked a module critical
+learned nothing about *that module* from the message. Naming it is the
+whole point of having pinned it.
+
+The version context became possible only once ADR-0001 was amended —
+`game.data.coreUpdate.version` gives an authoritative "14.366 is available"
+rather than an inference, which is what makes the line worth reading.
+
+**On the volunteer reminder**: CLAUDE.md project rule 1 originally required
+it in notifications as well as the UI. That was amended alongside this
+decision to scope the *visible reminder* to the checker window and
+generated bug reports. The reasoning is that a reminder shown where the GM
+acts on the information carries weight, while one repeated on every single
+login becomes furniture. Every other part of rule 1 still binds the
+notification — nothing may imply a package is dead, broken, abandoned, or
+that a developer is at fault.
+
+**Alternatives considered**:
+- Name every pinned module including clean ones: rejected — makes the
+  message longer on every login even when nothing is wrong, which is the
+  same dilution problem as the repeated reminder.
+- Name only pinned modules that already justify a toast (hard severity or
+  possibly-unmaintained): rejected — it would exclude the most common real
+  case, a pinned module not yet verified for a newly-available generation,
+  which is exactly when a GM wants to know before upgrading.
+- Escalate soft-severity pinned modules to the toast as well: rejected —
+  ADR-0002 gates the toast deliberately, and naming in the chat gives the
+  GM the information without the interruption.
+
+**Constraint preserved**: naming a pinned module in the callout does not
+count it toward the "problem" figures and does not affect toast gating.
+Soft severity remains excluded from both, per ADR-0002 and REQ
+"Compatibility Severity Classification". The callout is an additional
+section, not a re-tallying of the counts.
+
 ### Severity is a derived classification, not a stored field
 
 **Choice**: Hard/soft severity (ADR-0002) is computed at check-time from
