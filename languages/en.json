@@ -43,8 +43,15 @@
   "THE-PLUGIN-PLUGIN.Settings.NotificationFrequency.Choices.EveryLogin": "Every login",
   "THE-PLUGIN-PLUGIN.Settings.NotificationFrequency.Choices.Daily": "Daily",
   "THE-PLUGIN-PLUGIN.Settings.NotificationFrequency.Choices.OnlyWhenChanged": "Only when results changed",
-  "THE-PLUGIN-PLUGIN.LoginNotification.Summary": "Checked {total} active package(s): {upToDate} up to date, {updatesAvailable} with updates available, {issues} needing attention, {unmaintained} possibly unmaintained, {couldntCheck} couldn't be checked.",
+  "THE-PLUGIN-PLUGIN.LoginNotification.ResultsHeading": "Checked {total} active package(s):",
+  "THE-PLUGIN-PLUGIN.LoginNotification.StatusCountItem": "{label}: {count}",
+  "THE-PLUGIN-PLUGIN.LoginNotification.VersionContextConfirmedNewer": "Running Foundry {runningVersion}. Foundry confirms version {targetVersion} is available — results below compare against it.",
+  "THE-PLUGIN-PLUGIN.LoginNotification.VersionContextConfirmedCurrent": "Running Foundry {runningVersion} — Foundry confirms this is the latest available version.",
+  "THE-PLUGIN-PLUGIN.LoginNotification.VersionContextInferred": "Running Foundry {runningVersion}. Foundry couldn't confirm the latest version this session, so {targetVersion} is inferred from other installed packages — not confirmed.",
+  "THE-PLUGIN-PLUGIN.LoginNotification.VersionContextNoEvidence": "Running Foundry {runningVersion}. Foundry couldn't confirm a newer version this session, and no installed package suggests one exists.",
+  "THE-PLUGIN-PLUGIN.LoginNotification.VersionUnknown": "unknown version",
+  "THE-PLUGIN-PLUGIN.LoginNotification.PinnedHeading": "Pinned modules to look at:",
+  "THE-PLUGIN-PLUGIN.LoginNotification.PinnedItem": "{title} — {status}",
   "THE-PLUGIN-PLUGIN.LoginNotification.OpenChecker": "Open Compatibility Checker",
-  "THE-PLUGIN-PLUGIN.LoginNotification.ToastWarning": "One or more pinned modules may have a compatibility problem. Open the compatibility checker to review.",
-  "THE-PLUGIN-PLUGIN.LoginNotification.VolunteerReminder": "Remember: module developers are volunteers. A lagging or unverified status doesn't mean a package will never be updated."
+  "THE-PLUGIN-PLUGIN.LoginNotification.ToastWarning": "One or more pinned modules may have a compatibility problem. Open the compatibility checker to review."
 }
