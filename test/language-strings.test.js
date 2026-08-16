@@ -1,11 +1,13 @@
 // Guards CLAUDE.md project rule 1 (kindness to module developers) and
-// SPEC-0001 REQ "Checker Table" (the exact five-item status taxonomy) at the
-// localization-file level, since checker-table-logic.js itself only deals in
-// label *keys*, not the English strings a GM actually sees.
+// SPEC-0001 REQ "Checker Table" (the exact six-item status taxonomy, per
+// ADR-0006 — originally five) at the localization-file level, since
+// checker-table-logic.js itself only deals in label *keys*, not the English
+// strings a GM actually sees.
 //
 // Run with: npm test  (== node --test test/)
 //
-// Governing: SPEC-0001 REQ "Checker Table", CLAUDE.md project rule 1.
+// Governing: SPEC-0001 REQ "Checker Table", CLAUDE.md project rule 1,
+// ADR-0006.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -18,7 +20,7 @@ const strings = JSON.parse(readFileSync(path.join(here, "../languages/en.json"),
 
 const FORBIDDEN_WORDS = ["dead", "broken", "abandoned"];
 
-test("languages/en.json defines exactly the five permitted status labels, verbatim", () => {
+test("languages/en.json defines exactly the six permitted status labels, verbatim (ADR-0006)", () => {
   assert.equal(strings["THE-PLUGIN-PLUGIN.Status.UpToDate"], "Up to date & verified");
   assert.equal(strings["THE-PLUGIN-PLUGIN.Status.UpdateAvailable"], "Update available");
   assert.equal(
@@ -26,6 +28,10 @@ test("languages/en.json defines exactly the five permitted status labels, verbat
     "Not yet verified for current/target Foundry version"
   );
   assert.equal(strings["THE-PLUGIN-PLUGIN.Status.PossiblyUnmaintained"], "Possibly unmaintained");
+  assert.equal(
+    strings["THE-PLUGIN-PLUGIN.Status.VerifiedUpdateUnknown"],
+    "Verified, update unknown"
+  );
   assert.equal(strings["THE-PLUGIN-PLUGIN.Status.CouldntCheck"], "Couldn't check");
 });
 

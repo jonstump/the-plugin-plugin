@@ -322,12 +322,45 @@ test("summarizeCompatibilityResults handles an empty package list", () => {
   assert.equal(summary.upToDate, 0);
 });
 
+// Governing: ADR-0006 — a package with unknown update availability
+// (`updateAvailable: null`, most commonly fallback-sourced per SPEC-0002 REQ
+// "Fallback Field Trust") is counted separately from `upToDate`, which now
+// requires a *known* `false`. Before this, such a package was silently
+// folded into `upToDate` here even though the checker table labels it
+// "Verified, update unknown" — the chat summary and the table would have
+// disagreed about the same package.
+test("summarizeCompatibilityResults counts unknown update availability separately from up-to-date (ADR-0006)", () => {
+  const packages = [
+    pkg({ id: "clean", updateAvailable: false }),
+    pkg({ id: "fallback-resolved", updateAvailable: null }),
+    pkg({ id: "fallback-resolved-2", updateAvailable: null }),
+  ];
+
+  const summary = summarizeCompatibilityResults(packages);
+
+  assert.equal(summary.upToDate, 1);
+  assert.equal(summary.verifiedUpdateUnknown, 2);
+});
+
+test("summarizeCompatibilityResults: unknown update availability does not count when severity or possibly-unmaintained also applies (matches deriveStatusLabelKey precedence)", () => {
+  const packages = [
+    pkg({ id: "hard-and-unknown", updateAvailable: null, severity: "hard" }),
+    pkg({ id: "unmaintained-and-unknown", updateAvailable: null, possiblyUnmaintained: true }),
+  ];
+
+  const summary = summarizeCompatibilityResults(packages);
+
+  assert.equal(summary.verifiedUpdateUnknown, 0);
+  assert.equal(summary.hardIssues, 1);
+  assert.equal(summary.possiblyUnmaintained, 1);
+});
+
 // --- buildStatusCountEntries ------------------------------------------------
 // Governing: SPEC-0001 REQ "Login Notification" ("per-status counts ... as a
 // structured list rather than a single prose sentence"), "Per-status counts
 // are itemised" scenario.
 
-test("buildStatusCountEntries returns exactly the five shared status labels, in checker-table order", () => {
+test("buildStatusCountEntries returns exactly the six shared status labels, in checker-table order (ADR-0006)", () => {
   const summary = summarizeCompatibilityResults([]);
   const entries = buildStatusCountEntries(summary);
   assert.deepEqual(
@@ -337,6 +370,7 @@ test("buildStatusCountEntries returns exactly the five shared status labels, in 
       STATUS_LABEL_KEYS.UPDATE_AVAILABLE,
       STATUS_LABEL_KEYS.NOT_YET_VERIFIED,
       STATUS_LABEL_KEYS.POSSIBLY_UNMAINTAINED,
+      STATUS_LABEL_KEYS.VERIFIED_UPDATE_UNKNOWN,
       STATUS_LABEL_KEYS.COULDNT_CHECK,
     ]
   );
@@ -629,7 +663,7 @@ test("chat summary: per-status counts render as a <ul>/<li> structured list, not
 
   const summary = summarizeCompatibilityResults(packages);
   const entries = buildStatusCountEntries(summary);
-  assert.equal(entries.length, 5, "exactly the five shared status labels");
+  assert.equal(entries.length, 6, "exactly the six shared status labels (ADR-0006)");
 
   for (const entry of entries) {
     const expectedItem = format("THE-PLUGIN-PLUGIN.LoginNotification.StatusCountItem", {
@@ -645,7 +679,7 @@ test("chat summary: per-status counts render as a <ul>/<li> structured list, not
   // Nothing pinned in this scenario, so every <li> belongs to the status
   // list — confirms the list is structured markup, not prose text folded
   // into a single sentence.
-  assert.equal((content.match(/<li>/g) ?? []).length, 5);
+  assert.equal((content.match(/<li>/g) ?? []).length, 6);
 });
 
 // --- Render: version context, all four target cases -------------------------

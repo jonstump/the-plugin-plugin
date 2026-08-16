@@ -5,6 +5,7 @@
   "THE-PLUGIN-PLUGIN.Status.UpdateAvailable": "Update available",
   "THE-PLUGIN-PLUGIN.Status.NotYetVerified": "Not yet verified for current/target Foundry version",
   "THE-PLUGIN-PLUGIN.Status.PossiblyUnmaintained": "Possibly unmaintained",
+  "THE-PLUGIN-PLUGIN.Status.VerifiedUpdateUnknown": "Verified, update unknown",
   "THE-PLUGIN-PLUGIN.Status.CouldntCheck": "Couldn't check",
 
   "THE-PLUGIN-PLUGIN.CheckerTable.Title": "Compatibility Checker",

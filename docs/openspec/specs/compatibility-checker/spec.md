@@ -204,7 +204,17 @@ version, verified core version, and status.
   - Update available
   - Not yet verified for current/target Foundry version
   - Possibly unmaintained
+  - Verified, update unknown
   - Couldn't check
+- The system MUST classify a package as "Verified, update unknown" (per
+  ADR-0006) when its compatibility passes with no hard or soft severity and
+  it is not flagged "possibly unmaintained," but update availability itself
+  is unknown (`updateAvailable` is neither `true` nor `false`) — most
+  commonly a fallback-sourced result, per SPEC-0002 REQ "Fallback Field
+  Trust". The system MUST NOT use "Couldn't check" for this case: that
+  label is reserved for a package with no reliable data at all, and using
+  it here would misrepresent a package with valid, fully-trusted
+  compatibility data as one this module failed to check at all.
 - Each row MUST provide link-out buttons for: project page (manifest
   `url`), report issue (manifest `bugs`, falling back to `<url>/issues`
   when `url` is a GitHub repository URL), and changelog (manifest
@@ -226,6 +236,13 @@ version, verified core version, and status.
   is not a GitHub repository URL
 - **THEN** the system omits the "report issue" link-out button for that
   row rather than rendering a broken link
+
+#### Scenario: Verified compatibility with unknown update availability
+
+- **WHEN** a package's compatibility passes with no severity issue and it
+  is not "possibly unmaintained," but its `updateAvailable` is unknown
+- **THEN** the system classifies the package as "Verified, update unknown,"
+  never as "Couldn't check" or "Up to date & verified"
 
 ### Requirement: Possibly Unmaintained Heuristic
 

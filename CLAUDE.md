@@ -65,6 +65,9 @@ This module closes that gap.
    - Update available
    - Not yet verified for current/target Foundry version
    - Possibly unmaintained (see heuristic below)
+   - Verified, update unknown (compatibility passes but update availability
+     couldn't be determined — most commonly a fallback-sourced result, see
+     ADR-0006; never conflated with "Couldn't check")
    - Couldn't check
    Each row gets link-out buttons sourced from manifest fields: project page
    (`url`), report issue (`bugs`, falling back to `<url>/issues` when `url` is

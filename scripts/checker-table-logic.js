@@ -20,16 +20,18 @@ import { parseGithubRepo } from "./compatibility-classifier.js";
 // ---------------------------------------------------------------------------
 
 /**
- * The five permitted status labels (SPEC-0001 REQ "Checker Table" /
- * CLAUDE.md "Core v1 scope"). Keys map to localization keys in
- * languages/en.json — see STATUS_LABEL_I18N_KEYS. CLAUDE.md project rule 1:
- * never "dead"/"broken"/"abandoned" anywhere, including here.
+ * The six permitted status labels (SPEC-0001 REQ "Checker Table" /
+ * CLAUDE.md "Core v1 scope" — six as of ADR-0006; originally five). Keys map
+ * to localization keys in languages/en.json — see STATUS_LABEL_I18N_KEYS.
+ * CLAUDE.md project rule 1: never "dead"/"broken"/"abandoned" anywhere,
+ * including here.
  */
 export const STATUS_LABEL_KEYS = Object.freeze({
   UP_TO_DATE: "upToDate",
   UPDATE_AVAILABLE: "updateAvailable",
   NOT_YET_VERIFIED: "notYetVerified",
   POSSIBLY_UNMAINTAINED: "possiblyUnmaintained",
+  VERIFIED_UPDATE_UNKNOWN: "verifiedUpdateUnknown",
   COULDNT_CHECK: "couldntCheck",
 });
 
@@ -39,11 +41,12 @@ export const STATUS_LABEL_I18N_KEYS = Object.freeze({
   [STATUS_LABEL_KEYS.UPDATE_AVAILABLE]: "THE-PLUGIN-PLUGIN.Status.UpdateAvailable",
   [STATUS_LABEL_KEYS.NOT_YET_VERIFIED]: "THE-PLUGIN-PLUGIN.Status.NotYetVerified",
   [STATUS_LABEL_KEYS.POSSIBLY_UNMAINTAINED]: "THE-PLUGIN-PLUGIN.Status.PossiblyUnmaintained",
+  [STATUS_LABEL_KEYS.VERIFIED_UPDATE_UNKNOWN]: "THE-PLUGIN-PLUGIN.Status.VerifiedUpdateUnknown",
   [STATUS_LABEL_KEYS.COULDNT_CHECK]: "THE-PLUGIN-PLUGIN.Status.CouldntCheck",
 });
 
 /**
- * Derives which of the five permitted status labels applies to a classified
+ * Derives which of the six permitted status labels applies to a classified
  * package (the shape returned by compatibility-classifier.js's
  * `classifyActiveCompatibility` / `classifyCompatibility`: `status`,
  * `error`, `possiblyUnmaintained`, `severity` ('hard'|'soft'|null),
@@ -59,7 +62,7 @@ export const STATUS_LABEL_I18N_KEYS = Object.freeze({
  *      two corroborating signals per SPEC-0001's own heuristic), more
  *      informative than a bare compatibility lag.
  *   3. Hard or soft severity → "Not yet verified...". Per the spec's
- *      five-item taxonomy, hard severity does NOT get its own separate
+ *      taxonomy, hard severity does NOT get its own separate
  *      label — it renders the same text as soft, but is visually
  *      distinguished (see `deriveSeverityClass` below / ADR-0002 "hard
  *      escalates, soft stays quiet"). Foundry-version compatibility is
@@ -67,31 +70,27 @@ export const STATUS_LABEL_I18N_KEYS = Object.freeze({
  *      since the fetched manifest already reflects the latest published
  *      version's own declared compatibility fields.
  *   4. Update available — `pkg.updateAvailable === true`.
- *   5. Couldn't check (again) — `pkg.updateAvailable === null` (unknown,
- *      never `false`). Second judgment call, made explicit here (issue #48,
- *      SPEC-0002 REQ "Fallback Field Trust"): manifest-fetcher.js now
- *      returns `updateAvailable: null` for a fallback-sourced result (ADR-0003
- *      as amended 2026-08-16 — a fallback-sourced `version` is not
- *      trustworthy enough to compare, in either direction). SPEC-0002 only
- *      requires that an unknown-availability row not read as "up to date"
- *      and use one of the four remaining labels — it does not prescribe
- *      which. This picks "Couldn't check" over the other three candidates:
- *      update availability is the single most central signal this module
- *      exists to report, so a package for which it genuinely could not be
- *      determined is, in the sense that matters most to a GM, a package this
- *      check could not complete — even though `compatibility.verified` (a
- *      separate, still-trusted signal) is shown in its own column
- *      regardless of status label, so nothing informational is lost by this
- *      choice. "Couldn't check" already carries exactly this "we don't have
- *      full information" meaning elsewhere in the taxonomy (full fetch
- *      failure, step 1 above), so reusing it here does not introduce a new
- *      meaning for GMs to learn.
+ *   5. Verified, update unknown — `pkg.updateAvailable == null` (unknown,
+ *      never `false`), with no severity issue and not possibly unmaintained.
+ *      Per ADR-0006: manifest-fetcher.js returns `updateAvailable: null` for
+ *      a fallback-sourced result (ADR-0003 as amended 2026-08-16 — a
+ *      fallback-sourced `version` is not trustworthy enough to compare, in
+ *      either direction), and per ADR-0003's own real-world measurement,
+ *      fallback resolution is the *common* case for a checked package, not
+ *      a rare edge. An earlier revision of this function (issue #48) mapped
+ *      this state to "Couldn't check" instead — that collapsed most of the
+ *      table into a label meaning "no reliable data at all," even though
+ *      `compatibility.verified`, severity, and links were all still
+ *      correctly known for these rows. This dedicated status keeps that
+ *      distinction visible: "Couldn't check" now means only what it always
+ *      meant (no reliable data, step 1), and this status means "we know
+ *      this package is fine, we just don't know if a newer version exists."
  *   6. Up to date & verified — the default when nothing else applies, i.e.
  *      `pkg.updateAvailable === false` (a known, confirmed non-update) and
  *      every earlier condition is clear.
  *
  * Governing: SPEC-0001 REQ "Checker Table", SPEC-0002 REQ "Fallback Field
- * Trust" (issue #48), ADR-0002, ADR-0003 (amended 2026-08-16).
+ * Trust" (issue #48), ADR-0002, ADR-0003 (amended 2026-08-16), ADR-0006.
  */
 export function deriveStatusLabelKey(pkg) {
   if (!pkg || pkg.status === "error" || pkg.error) {
@@ -106,14 +105,15 @@ export function deriveStatusLabelKey(pkg) {
   if (pkg.updateAvailable) {
     return STATUS_LABEL_KEYS.UPDATE_AVAILABLE;
   }
-  // Governing: SPEC-0002 REQ "Fallback Field Trust" (issue #48) — unknown
-  // update availability (`null`, as manifest-fetcher.js now returns for
-  // every fallback-sourced result) MUST NOT fall through to "Up to date &
-  // verified" below; only a known `false` (an actual, comparable non-update)
-  // does. See the judgment-call note above the function for why "Couldn't
-  // check" was chosen over the other three remaining labels.
+  // Governing: ADR-0006 — unknown update availability (`null`, as
+  // manifest-fetcher.js returns for every fallback-sourced result) MUST NOT
+  // fall through to "Up to date & verified" below (only a known `false`
+  // does), and MUST NOT collapse into "Couldn't check" either — that
+  // conflates "no reliable data" with "compatibility is fine, update status
+  // unknown," which real-world fallback-resolution rates make the *common*
+  // case, not a rare edge. See the judgment-call note above the function.
   if (pkg.updateAvailable == null) {
-    return STATUS_LABEL_KEYS.COULDNT_CHECK;
+    return STATUS_LABEL_KEYS.VERIFIED_UPDATE_UNKNOWN;
   }
   return STATUS_LABEL_KEYS.UP_TO_DATE;
 }
@@ -121,7 +121,7 @@ export function deriveStatusLabelKey(pkg) {
 /**
  * Visual-only severity classification for a row/status badge: 'hard' |
  * 'soft' | null. This is how hard severity is distinguished from soft
- * *within* the five-label taxonomy — both render identical "Not yet
+ * *within* the status taxonomy — both render identical "Not yet
  * verified..." text (see `deriveStatusLabelKey`); this class is what a
  * template/stylesheet uses to escalate hard's visual weight (e.g. a
  * stronger border/icon), consistent with ADR-0002's "hard escalates, soft
