@@ -137,6 +137,108 @@ test("fetchPackageManifest errors when no manifest URL is declared", async () =>
   assert.equal(result.error.packageId, "no-manifest");
 });
 
+// --- Link-out fields: installed-manifest fallback -----------------------
+// Governing: SPEC-0001 REQ "Checker Table" (link-out buttons sourced from
+// manifest `url`/`bugs`/`changelog`). Foundry parses these fields from a
+// package's local module.json/system.json at world-load time regardless of
+// network reachability (`toPackageInfo`'s `links`, threaded through here as
+// `pkg.links`) — a package whose *remote* manifest can't be fetched (CI-
+// artifact-only hosting, CORS-blocked, offline) still gets link-out buttons
+// when the locally-installed copy already declares them.
+
+test("fetchPackageManifest: remote fetch fails entirely, but the installed manifest's own links still populate the error result", async () => {
+  const pkg = {
+    id: "unreachable-mod",
+    title: "Unreachable Mod",
+    manifestUrl: "https://example.com/unreachable-mod.json",
+    installedVersion: "1.0.0",
+    links: {
+      url: "https://gitlab.com/someone/unreachable-mod",
+      bugs: null,
+      changelog: null,
+    },
+  };
+  const fetchImpl = async () => ({ ok: false, status: 404 });
+
+  const result = await fetchPackageManifest(pkg, { fetchImpl });
+
+  assert.equal(result.status, "error");
+  assert.equal(result.links.url, "https://gitlab.com/someone/unreachable-mod");
+  assert.equal(result.links.bugs, null);
+  assert.equal(result.links.changelog, null);
+});
+
+test("fetchPackageManifest: no installed links and remote fetch fails -> links is null, not an object of nulls", async () => {
+  const pkg = {
+    id: "dead-mod",
+    title: "Dead Mod",
+    manifestUrl: "https://example.com/dead-mod.json",
+    installedVersion: "1.0.0",
+  };
+  const fetchImpl = async () => ({ ok: false, status: 404 });
+
+  const result = await fetchPackageManifest(pkg, { fetchImpl });
+
+  assert.equal(result.status, "error");
+  assert.equal(result.links, null);
+});
+
+test("fetchPackageManifest: successful remote manifest's own links take priority over installed links", async () => {
+  const pkg = {
+    id: "some-mod",
+    title: "Some Mod",
+    manifestUrl: "https://example.com/some-mod.json",
+    installedVersion: "1.0.0",
+    links: {
+      url: "https://old-url.example.com/some-mod",
+      bugs: "https://old-url.example.com/some-mod/issues",
+      changelog: "https://old-url.example.com/some-mod/CHANGELOG",
+    },
+  };
+  const fetchImpl = async () =>
+    okResponse({
+      version: "1.1.0",
+      url: "https://github.com/someone/some-mod",
+      bugs: "https://github.com/someone/some-mod/issues",
+      changelog: "https://github.com/someone/some-mod/releases",
+    });
+
+  const result = await fetchPackageManifest(pkg, { fetchImpl });
+
+  assert.equal(result.links.url, "https://github.com/someone/some-mod");
+  assert.equal(result.links.bugs, "https://github.com/someone/some-mod/issues");
+  assert.equal(result.links.changelog, "https://github.com/someone/some-mod/releases");
+});
+
+test("fetchPackageManifest: successful remote manifest missing one link field falls back to the installed manifest's value for just that field", async () => {
+  const pkg = {
+    id: "some-mod",
+    title: "Some Mod",
+    manifestUrl: "https://example.com/some-mod.json",
+    installedVersion: "1.0.0",
+    links: {
+      url: "https://old-url.example.com/some-mod",
+      bugs: null,
+      changelog: "https://old-url.example.com/some-mod/CHANGELOG",
+    },
+  };
+  // Remote manifest declares `url` but not `bugs`/`changelog`.
+  const fetchImpl = async () =>
+    okResponse({
+      version: "1.1.0",
+      url: "https://github.com/someone/some-mod",
+    });
+
+  const result = await fetchPackageManifest(pkg, { fetchImpl });
+
+  assert.equal(result.links.url, "https://github.com/someone/some-mod");
+  assert.equal(result.links.bugs, null);
+  assert.equal(
+    result.links.changelog,
+    "https://old-url.example.com/some-mod/CHANGELOG"
+  );
+});
+
 test("fetchPackageManifest detects update availability from version comparison", async () => {
   const pkg = {
     id: "some-mod",
@@ -1448,4 +1550,54 @@ test("getActivePackagesFromGame handles a Foundry Collection (yields values, not
   assert.equal(modA.manifestUrl, "https://example.com/mod-a.json");
   assert.ok(!packages.some((p) => p.id === "mod-b"), "inactive module excluded");
   assert.equal(packages.find((p) => p.id === "sfrpg")?.isSystem, true);
+});
+
+// Governing: SPEC-0001 REQ "Checker Table" — the installed module/system
+// document (parsed by Foundry from local module.json/system.json, no
+// network call) carries its own `url`/`bugs`/`changelog` fields, which must
+// survive into `pkg.links` so a package whose *remote* manifest can't be
+// fetched still has link-out data available (see fetchPackageManifest's
+// "installed-manifest fallback" tests above).
+test("getActivePackagesFromGame carries the installed module's url/bugs/changelog through as pkg.links", () => {
+  const fakeGame = {
+    modules: new Map([
+      [
+        "mod-a",
+        {
+          id: "mod-a",
+          title: "Mod A",
+          active: true,
+          version: "1.0.0",
+          manifest: "https://example.com/mod-a.json",
+          url: "https://gitlab.com/someone/mod-a",
+          bugs: "https://gitlab.com/someone/mod-a/-/issues",
+          changelog: "https://gitlab.com/someone/mod-a/-/blob/main/CHANGELOG.md",
+        },
+      ],
+    ]),
+    system: null,
+  };
+
+  const packages = getActivePackagesFromGame(fakeGame);
+  const modA = packages.find((p) => p.id === "mod-a");
+
+  assert.deepEqual(modA.links, {
+    url: "https://gitlab.com/someone/mod-a",
+    bugs: "https://gitlab.com/someone/mod-a/-/issues",
+    changelog: "https://gitlab.com/someone/mod-a/-/blob/main/CHANGELOG.md",
+  });
+});
+
+test("getActivePackagesFromGame: installed module with no url/bugs/changelog fields yields links of all nulls, not a crash", () => {
+  const fakeGame = {
+    modules: new Map([
+      ["mod-a", { id: "mod-a", title: "Mod A", active: true, version: "1.0.0" }],
+    ]),
+    system: null,
+  };
+
+  const packages = getActivePackagesFromGame(fakeGame);
+  const modA = packages.find((p) => p.id === "mod-a");
+
+  assert.deepEqual(modA.links, { url: null, bugs: null, changelog: null });
 });

@@ -241,6 +241,15 @@ version, verified core version, and status.
   when `url` is a GitHub repository URL), and changelog (manifest
   `changelog`), each shown only when the corresponding manifest field is
   present.
+- Each link-out field is resolved by preferring the *remote* manifest (the
+  package's own declared `manifest` URL, freshly fetched) and falling back,
+  per field, to the same field on the package's *locally-installed*
+  manifest (parsed by Foundry from `module.json`/`system.json` at world-load
+  time — no network call). This applies whether the remote fetch failed
+  outright (status "Couldn't check") or merely omitted that one field. A
+  package is not required to have a reachable remote manifest to get
+  link-out buttons; it only needs the field to be declared *somewhere* the
+  system already has it.
 - The window MUST be visible only to users with the GM role.
 - The window MUST display a visible reminder that package developers are
   volunteers and that a lagging or unverified status does not mean a
@@ -254,9 +263,28 @@ version, verified core version, and status.
 #### Scenario: Missing link-out field
 
 - **WHEN** a package's fetched manifest has no `bugs` field and its `url`
-  is not a GitHub repository URL
+  is not a GitHub repository URL, and the locally-installed manifest has no
+  `bugs` field either
 - **THEN** the system omits the "report issue" link-out button for that
   row rather than rendering a broken link
+
+#### Scenario: Remote manifest unreachable, installed manifest still provides link-out fields
+
+- **WHEN** a package's remote manifest fetch fails entirely (status
+  "Couldn't check" — e.g. a GitLab CI-artifact-hosted manifest with no
+  CORS-open fallback) but the package's locally-installed manifest declares
+  `url`
+- **THEN** the row still renders the project-page link-out button, sourced
+  from the installed manifest, even though its status is "Couldn't check"
+
+#### Scenario: Remote manifest present but incomplete
+
+- **WHEN** a package's fetched manifest declares `url` but not `changelog`,
+  and the locally-installed manifest declares `changelog`
+- **THEN** the row renders both the project-page link (from the fetched
+  manifest) and the changelog link (from the installed manifest) — the two
+  fields are resolved independently, not as a single fetched-or-installed
+  choice for the whole package
 
 #### Scenario: Game system is not rendered as a row
 

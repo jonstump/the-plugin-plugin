@@ -129,9 +129,16 @@ function errorResult(pkg, message) {
     verified: null,
     compatibility: null,
     // Governing: SPEC-0001 REQ "Checker Table", SPEC-0001 REQ "Possibly
-    // Unmaintained Heuristic" — link-out fields, null when the manifest
-    // couldn't be fetched at all.
-    links: null,
+    // Unmaintained Heuristic" — link-out fields. The *remote* manifest
+    // couldn't be fetched, but the package's own locally-installed manifest
+    // (parsed by Foundry at install time, no network required) may still
+    // declare `url`/`bugs`/`changelog` — falling back to it here means a
+    // package whose remote manifest is unreachable (CI-artifact-only
+    // hosting, CORS-blocked, etc.) still gets link-out buttons when we
+    // genuinely know where its repo lives. `pkg.links` carries that
+    // installed-manifest data through from `toPackageInfo` below; null when
+    // neither the caller nor the installed package provided any.
+    links: pkg.links ?? null,
     status: "error",
     // Governing: SPEC-0002 REQ "Result Provenance" — no manifest was ever
     // resolved for an error result, so there is no source to attribute.
@@ -202,12 +209,16 @@ function buildOkResult(pkg, manifest, provenance = "declared") {
     // Governing: SPEC-0001 REQ "Checker Table" (link-out buttons, issue #8),
     // SPEC-0001 REQ "Possibly Unmaintained Heuristic" (issue #7 needs `url`/
     // `bugs` to detect a GitHub-hosted repo for the archived-repo check).
-    // Sourced from the *fetched* manifest, same object already parsed above
-    // — no new network call.
+    // Prefers the *fetched* manifest (most current declared data), falling
+    // back per-field to the locally-installed manifest's own `url`/`bugs`/
+    // `changelog` (`pkg.links`, from `toPackageInfo` below) when the fetched
+    // manifest omits a given field — e.g. a manifest that declares `url` but
+    // not `changelog` still gets an installed-sourced changelog link rather
+    // than none.
     links: {
-      url: manifest?.url ?? null,
-      bugs: manifest?.bugs ?? null,
-      changelog: manifest?.changelog ?? null,
+      url: manifest?.url ?? pkg.links?.url ?? null,
+      bugs: manifest?.bugs ?? pkg.links?.bugs ?? null,
+      changelog: manifest?.changelog ?? pkg.links?.changelog ?? null,
     },
     status: "ok",
     error: null,
@@ -592,6 +603,15 @@ export async function checkPackages(packages, options = {}) {
 // so the logic above stays testable without a running world.
 // ---------------------------------------------------------------------------
 
+/**
+ * `pkg.url`/`pkg.bugs`/`pkg.changelog` come straight off the *installed*
+ * manifest that Foundry already parsed from the package's local
+ * `module.json`/`system.json` at world-load time — no network call. Carried
+ * through as `links` so `buildOkResult`/`errorResult` in the fetch layer
+ * above can fall back to it when the remote manifest can't supply (or
+ * doesn't declare) the same field. See "Missing link-out field" scenario,
+ * SPEC-0001 REQ "Checker Table".
+ */
 function toPackageInfo(pkg, isSystem = false) {
   return {
     id: pkg.id,
@@ -599,6 +619,11 @@ function toPackageInfo(pkg, isSystem = false) {
     manifestUrl: pkg.manifest ?? null,
     installedVersion: pkg.version ?? null,
     isSystem,
+    links: {
+      url: pkg.url ?? null,
+      bugs: pkg.bugs ?? null,
+      changelog: pkg.changelog ?? null,
+    },
   };
 }
 
