@@ -135,7 +135,10 @@ every package the fallback cannot serve.
 - **WHEN** a package declares a manifest URL on a host other than
   `github.com` and that URL fails
 - **THEN** the system records "Couldn't check" without attempting any
-  fallback request
+  fallback request. This is a permanent limitation for hosts whose public
+  endpoints are not CORS-open, not a pending gap — see ADR-0008, which
+  measured that GitLab's raw-file and API endpoints both lack an
+  `Access-Control-Allow-Origin` header.
 
 #### Scenario: Manifest absent from the default branch
 
