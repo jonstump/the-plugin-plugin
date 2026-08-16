@@ -7,6 +7,21 @@ extends: [ADR-0001]
 
 # ADR-0003: Fall back to `raw.githubusercontent.com` when a package's declared manifest URL is CORS-blocked
 
+> ## ⚠️ Amended 2026-08-16 — fallback-sourced `version` is not trustworthy
+>
+> Live testing after implementation found the fallback reporting a **latest
+> version older than the installed one**, producing a false "Up to date &
+> verified". The decision below stands; what changes is **which fields of a
+> fallback-sourced manifest may be used**:
+>
+> - **`compatibility.verified` — still used.** Measurably reliable.
+> - **`version` — no longer used.** Treated as unknown; no "latest version"
+>   figure and no update-available verdict for fallback-sourced rows.
+>
+> The Consequences section below still says the risk is that `HEAD` may be
+> *ahead* of a release. That was half right: the risk is bidirectional, and
+> the *behind* direction is the harmful one. See "Amendment" at the end.
+
 ## Context and Problem Statement
 
 SPEC-0001's manifest check fetches every active package's declared
@@ -97,11 +112,17 @@ Measured against the seven packages in the real test world:
 |---|---|---|
 | `multilevel-tokens` | `raw.githubusercontent.com` | already succeeded, untouched |
 | `lib-wrapper` | GitHub release asset | recovered — `version 1.13.5.1`, `verified 14` |
-| `smarttarget` | GitHub release asset | recovered — `version 0.5.1`, `verified 14` |
+| `smarttarget` | GitHub release asset | recovered — `version 0.5.1`, `verified 14` [†](#amendment--2026-08-16) |
 | `the-plugin-plugin` | GitHub release asset | recovered — `version 0.1.0`, `verified 13` |
 | `sfrpg` (system) | GitHub release asset | still fails (404 — `system.json` is built into `dist/`, absent from the repo root) |
 | `pings` | GitLab job artifact | still fails (not GitHub; no equivalent raw path) |
 | `settings-extender` | GitLab job artifact | still fails (same) |
+
+† **`smarttarget`'s `version 0.5.1` is the value that later triggered the
+2026-08-16 amendment.** Its actual released version is `4.0.0`; the `0.5.1`
+committed to the default branch is a stale placeholder. Only the
+`verified 14` half of that row was a genuine recovery. Row left as
+originally measured; see [Amendment](#amendment--2026-08-16).
 
 Coverage moves from **1/7 to 4/7**. That is a partial fix, deliberately
 adopted as such.
@@ -147,6 +168,14 @@ was never wrong; it was starved of input.
   trade-off prove unacceptable in practice.
 
 ### Confirmation
+
+> **Extended by the [2026-08-16 amendment](#amendment--2026-08-16).** The
+> reasoning below treats "`HEAD` may be ahead of any release" as the risk,
+> and marking provenance as the mitigation. Both proved insufficient: the
+> skew is bidirectional, and a correctly-marked row still reported a
+> version older than the installed one. The amendment's own Confirmation
+> adds the rejections that follow from that; the four bullets below remain
+> in force.
 
 A result obtained via the fallback MUST be distinguishable from one
 obtained via the package's own declared URL, both in the data model and to
@@ -278,3 +307,141 @@ definition unavailable on the path where the fallback is needed.
   CORS-open manifest convention; or observed HEAD-vs-release skew proves
   harmful enough to justify paying the API rate-limit cost for tag
   resolution.
+
+## Amendment — 2026-08-16
+
+### What live testing found
+
+The fallback shipped, and the first real scan surfaced this row:
+
+| `theripper93/Smart-Target` | |
+|---|---|
+| Installed | **0.9.8** |
+| Reported "Latest" (via fallback) | **0.5.1** |
+| **Actual latest release** | **4.0.0** |
+| Status shown to the GM | **"Up to date & verified"** |
+
+Two things are wrong. A "latest" older than "installed" is visibly
+incoherent. Worse, the GM is told they are current while sitting three
+major versions behind — a **false negative**, in a tool whose entire
+purpose is telling GMs what is out of date. Of the two ways to be wrong,
+this is the damaging one: an over-alarm gets checked, a false all-clear
+does not.
+
+The original Consequences section anticipated skew in one direction only —
+"a repository whose default branch is ahead of its latest release will
+report a version that is not yet downloadable". The skew is
+**bidirectional**, and the unexamined direction is the one that hurts.
+
+### Root cause: the two fields have different reliability
+
+The same fallback file yields one trustworthy field and one untrustworthy
+one, and there is a mechanical reason. Fetching Smart-Target's *released*
+manifest and its *committed* manifest side by side:
+
+```
+RELEASED  (releases/latest/download/module.json): version=4.0.0  verified=14
+COMMITTED (raw.githubusercontent.com/HEAD)      : version=0.5.1  verified=14
+```
+
+`version` differs by three major versions. `verified` is **identical**.
+
+The reason: **`version` is stamped by CI at release time**, so the value
+committed to the default branch is whatever placeholder was last written by
+hand — frequently stale, and never load-bearing for the maintainer.
+**`compatibility.verified` is hand-edited metadata that lives in the
+committed file**, which is exactly why a developer updates it there. This
+project's own release workflow does the same thing: `release.yml` stamps
+`.version` into `module.json` at tag time.
+
+So the fallback's usefulness was never uniform across fields, and the
+original decision treated the manifest as a single trustworthy unit.
+
+Sampled across repositories that publish releases: `lib-wrapper`
+(`1.13.5.1` committed vs `v1.13.5.1` released) and `multilevel-tokens`
+(`1.7.0` vs `v1.7.0`) both match, while `Smart-Target` does not. A small
+sample, and deliberately not presented as a rate — the point is that a
+maintainer's release tooling is **unknowable from the manifest**, so no
+per-package prediction is possible.
+
+### Revised decision
+
+A fallback-sourced manifest is no longer treated as a whole. Field by
+field:
+
+* **`compatibility.verified` (and legacy `compatibleCoreVersion`) — used.**
+  Reliable, and it is what feeds severity classification (ADR-0002), the
+  comparison target's peer-inference fallback (ADR-0001), and the
+  verified-check precondition for the unmaintained heuristic (ADR-0004).
+  This is the bulk of the fallback's value and it is retained intact.
+* **`version` — not used.** For a fallback-sourced result the system MUST
+  treat the latest version as **unknown**: no "latest version" figure
+  surfaced, and no update-available verdict derived. Unknown is reported as
+  unknown, never as "up to date".
+* **`url` / `bugs` / `changelog` — used.** Link-out targets are not
+  version-sensitive; a stale committed URL still points at the right
+  project.
+
+Declared-URL results are unaffected. Their `version` *is* the released
+version, which is the whole reason the declared URL remains primary.
+
+### Consequences of the amendment
+
+* Good, because it removes the only failure mode that could tell a GM they
+  are current when they are not — the class of error this project can least
+  afford.
+* Good, because it costs nothing: no extra request, no rate-limit spend, no
+  new dependency. It is a narrowing of what is trusted, not new machinery.
+* Good, because it keeps the compatibility signal, which was the larger
+  half of ADR-0003's value and is measurably sound.
+* Good, because "unknown" is already a first-class outcome throughout this
+  project (ADR-0001's no-peer-signal, ADR-0004's unknown activity, the
+  "Couldn't check" status), so it needs no new vocabulary.
+* Bad, because update availability is lost for every fallback-sourced
+  package — 3 of 7 in the tested world. A GM will see compatibility
+  information but no "update available" for those rows, which is a real
+  reduction in what the checker reports.
+* Bad, because a package whose committed `version` *is* accurate is
+  penalised alongside the ones that are not. There is no way to tell them
+  apart without the API call this ADR declined to make.
+* Neutral, because the GitHub API tag-resolution option remains available
+  as a targeted upgrade if the lost update-availability proves more painful
+  than the rate-limit cost. That trade-off is unchanged; only the reason to
+  reach for it has become clearer.
+
+### Confirmation
+
+Code review against this amendment should reject:
+
+* any surfacing of a fallback-sourced `version` as the latest or published
+  version;
+* any update-available verdict computed from a fallback-sourced `version`,
+  including one guarded by a plausibility check such as "only if newer than
+  installed" — a stale placeholder that happens to be higher passes that
+  guard and reports wrongly, so plausibility is not evidence;
+* any presentation that renders unknown update availability as "up to date"
+  rather than as unknown.
+
+A regression test MUST cover the observed case directly: a fallback-sourced
+manifest whose `version` is **older** than the installed version MUST NOT
+produce an "up to date" verdict, and MUST NOT surface that version as the
+latest.
+
+### Follow-up required
+
+SPEC-0002 REQ "Result Provenance" currently requires only that
+fallback-sourced data be *distinguishable*, which is not sufficient — the
+Smart-Target row was correctly marked "Read from the repository's default
+branch, not a published release" and was still wrong. The requirement needs
+to state which fields may be used, not merely how they are labelled.
+
+Two smaller items observed at the same time, for the same amendment:
+
+* The checker table's **"Latest" column header** asserts more than
+  fallback-sourced data supports. With `version` no longer surfaced for
+  those rows the cell is empty, which resolves the immediate conflict, but
+  the header wording is worth revisiting.
+* The provenance note renders as **text without an `aria-label` or
+  `title`**. It is not colour-only, so it does not violate SPEC-0002's
+  accessibility requirement outright, but the requirement asks for a text
+  alternative naming the source specifically.
