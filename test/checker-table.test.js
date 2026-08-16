@@ -322,3 +322,76 @@ test("comparisonTarget: inferred with no peer evidence maps to the 'inferred' vi
     "THE-PLUGIN-PLUGIN.CheckerTable.TargetNoEvidence"
   );
 });
+
+// ---------------------------------------------------------------------------
+// Active game system is fetched/classified but never rendered as a row
+// (issue #60, ADR-0007, SPEC-0001 REQ "Checker Table" amended).
+//
+// `getActivePackagesFromGame` (manifest-fetcher.js) has always included the
+// active system in the fetched/classified package set, via
+// `toPackageInfo(system, true)` setting `isSystem: true`. That was always
+// intentional — the system's `compatibility.verified` feeds
+// `computeInferredLatest` peer inference (compatibility-classifier.js) — but
+// the system was *also* showing up as its own row in the checker table,
+// which was never the intent. `#buildRows` (checker-table.js) now filters
+// `isSystem` packages out of the rendered rows array; this is the only
+// change for this issue. These tests drive that through the same
+// `_prepareContext`-based harness as the rest of this file, rather than
+// reaching into the private `#buildRows` method directly.
+//
+// Governing: ADR-0007, SPEC-0001 REQ "Checker Table".
+// ---------------------------------------------------------------------------
+
+test("checker table rows: the active game system is fetched and feeds peer inference, but is not rendered as a row", async () => {
+  const { secondContext } = await runComparisonTargetScenario((game) => {
+    // No game.data.coreUpdate — falls to peer inference, so the system's
+    // compatibility.verified (14, ahead of the running generation 13) is the
+    // only thing that can produce an "inferred, peer signal present" target.
+    game.release = { generation: "13", version: "13.351", build: 351 };
+    game.system = {
+      id: "starfinder",
+      title: "Starfinder First Edition",
+      version: "2.0.0",
+      manifest: "https://example.com/starfinder/system.json",
+    };
+    game.modules = [
+      {
+        id: "some-module",
+        title: "Some Module",
+        active: true,
+        version: "1.0.0",
+        manifest: "https://example.com/some-module/module.json",
+      },
+    ];
+    globalThis.fetch = async (url) => {
+      if (url.includes("starfinder")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ version: "2.1.0", compatibility: { verified: "14" } }),
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ version: "1.0.0", compatibility: { verified: "13" } }),
+      };
+    };
+  });
+
+  // The module still renders as its own row.
+  const moduleRow = secondContext.rows.find((r) => r.id === "some-module");
+  assert.ok(moduleRow, "expected the active module's row to be present");
+
+  // The system does NOT render as a row, regardless of its own compatibility
+  // status.
+  const systemRow = secondContext.rows.find((r) => r.id === "starfinder");
+  assert.equal(systemRow, undefined, "the active game system must not render as a row");
+
+  // But its compatibility.verified (14) still reached peer inference: the
+  // comparison target is "inferred" with the system's version as the peer
+  // signal, proving the system was still fetched and still fed into
+  // classification.packages — only the *rendered rows* filter excludes it.
+  assert.deepEqual(secondContext.comparisonTarget.statusClass, "inferred");
+  assert.ok(secondContext.comparisonTarget.note.includes("14"));
+});
