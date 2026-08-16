@@ -8,13 +8,17 @@
  * never contacts foundryvtt.com or any other third-party service for core
  * version data).
  *
- * Governing: ADR-0003, SPEC-0002 (extends SPEC-0001) — when a package's
- * declared manifest URL fails, `fetchPackageManifest` makes exactly one
- * additional attempt against a `raw.githubusercontent.com` URL derived from
- * the declared URL, for `github.com`-hosted declared URLs only. That second
- * attempt happens inside the same per-package flow, so it shares the
- * existing concurrency pool, cancellation signal, and session cache without
- * any changes to `runWithConcurrency` or `checkPackages` themselves.
+ * Governing: ADR-0003, ADR-0008, SPEC-0002 (extends SPEC-0001) — when a
+ * package's declared manifest URL fails, `fetchPackageManifest` makes
+ * exactly one additional attempt against a CORS-open default-branch mirror
+ * derived from the declared URL: `raw.githubusercontent.com` for
+ * `github.com`-hosted declared URLs, `cdn.statically.io` for
+ * `gitlab.com`-hosted ones (ADR-0008 Amendment, 2026-08-16 — GitLab's own
+ * raw-file endpoint isn't CORS-open). Every other host stays unsupported.
+ * That second attempt happens inside the same per-package flow, so it
+ * shares the existing concurrency pool, cancellation signal, and session
+ * cache without any changes to `runWithConcurrency` or `checkPackages`
+ * themselves.
  *
  * The functions below are written to be pure / dependency-injectable
  * (fetch implementation, cache, AbortSignal are all parameters) so the core
@@ -272,10 +276,12 @@ export function deriveFallbackUrl(declaredUrl) {
     return null;
   }
 
-  // Governing: SPEC-0002 REQ "Fallback Scope and Limits" — the fallback is
-  // restricted to github.com; every other host stays "Couldn't check" with
-  // no fallback attempt.
-  if (parsed.hostname.toLowerCase() !== "github.com") return null;
+  // Governing: SPEC-0002 REQ "Fallback Scope and Limits" (ADR-0008
+  // Amendment, 2026-08-16) — the fallback is restricted to hosts with a
+  // known CORS-open path, own or third-party mirror. Every other host
+  // stays "Couldn't check" with no fallback attempt.
+  const hostname = parsed.hostname.toLowerCase();
+  if (hostname !== "github.com" && hostname !== "gitlab.com") return null;
 
   const segments = parsed.pathname.split("/").filter(Boolean);
   // Need at least <owner>/<repo>/<...>/<filename> — anything shorter can't
@@ -288,6 +294,16 @@ export function deriveFallbackUrl(declaredUrl) {
   // (system.json) resolve correctly too.
   const filename = segments[segments.length - 1];
   if (!owner || !repo || !filename) return null;
+
+  // Governing: SPEC-0002 REQ "Fallback URL Derivation" (ADR-0008
+  // Amendment) — GitLab's own raw-file endpoint sends no
+  // Access-Control-Allow-Origin header (measured, ADR-0008), so the
+  // fallback goes through a CORS-open third-party mirror instead. `@HEAD`
+  // resolves the actual default branch with no prior lookup, mirroring
+  // raw.githubusercontent.com's own `HEAD` alias.
+  if (hostname === "gitlab.com") {
+    return `https://cdn.statically.io/gl/${owner}/${repo}@HEAD/${filename}`;
+  }
 
   return `https://raw.githubusercontent.com/${owner}/${repo}/HEAD/${filename}`;
 }
@@ -399,13 +415,15 @@ export function consumeGithubApiBudget(budget) {
  * Governing: SPEC-0001 REQ "Manifest Check", SPEC-0001 REQ "Error Handling
  * Standards", ADR-0001 (only ever fetches the package's own manifest URL).
  *
- * Governing: ADR-0003, SPEC-0002 REQ "Fallback Trigger and Ordering" — the
- * declared URL is always attempted first; a raw.githubusercontent.com
- * fallback is attempted at most once, only when the declared attempt fails,
- * and only for github.com-hosted declared URLs (SPEC-0002 REQ "Fallback
- * Scope and Limits"). Both attempts run inside this single function call, so
- * they share whichever concurrency slot / cancellation signal the caller
- * (`checkPackages`) is already managing — no pool changes needed.
+ * Governing: ADR-0003, ADR-0008, SPEC-0002 REQ "Fallback Trigger and
+ * Ordering" — the declared URL is always attempted first; a default-branch
+ * mirror fallback (`raw.githubusercontent.com` or, for `gitlab.com`-hosted
+ * URLs, `cdn.statically.io`) is attempted at most once, only when the
+ * declared attempt fails, and only for hosts with a known CORS-open path
+ * (SPEC-0002 REQ "Fallback Scope and Limits"). Both attempts run inside
+ * this single function call, so they share whichever concurrency slot /
+ * cancellation signal the caller (`checkPackages`) is already managing —
+ * no pool changes needed.
  *
  * Governing: ADR-0003 Amendment 2, SPEC-0002 REQ "Release Tag Resolution" —
  * before the raw/HEAD fallback, and only when the caller supplied a shared
@@ -444,10 +462,11 @@ export async function fetchPackageManifest(pkg, options = {}) {
 
   const fallbackUrl = deriveFallbackUrl(pkg.manifestUrl);
 
-  // Governing: SPEC-0002 REQ "Fallback Scope and Limits" — no fallback URL
-  // could be derived (non-github.com host, or an unparseable declared URL):
-  // report an honest "Couldn't check" with no further attempt, and no
-  // GitHub API call either way.
+  // Governing: SPEC-0002 REQ "Fallback Scope and Limits" (ADR-0008
+  // Amendment) — no fallback URL could be derived (a host with no known
+  // CORS-open path, own or third-party mirror, or an unparseable declared
+  // URL): report an honest "Couldn't check" with no further attempt, and
+  // no GitHub API call either way.
   if (!fallbackUrl) {
     return errorResult(
       pkg,
@@ -455,26 +474,30 @@ export async function fetchPackageManifest(pkg, options = {}) {
     );
   }
 
-  if (githubApiBudget && consumeGithubApiBudget(githubApiBudget)) {
-    const parsedGithub = parseGithubManifestUrl(pkg.manifestUrl);
-    if (parsedGithub) {
-      const tagResolution = await resolveGithubReleaseTag(
-        parsedGithub,
+  // Governing: ADR-0008 Amendment — parse (free) BEFORE consuming any
+  // shared budget, so a gitlab.com-hosted package (whose fallback is now
+  // also non-null, per ADR-0008) never spends GitHub API rate-limit budget
+  // on a lookup it could never have used — `parseGithubManifestUrl` returns
+  // null for anything not github.com, and the budget must stay unconsumed
+  // in that case for other packages/consumers to use.
+  const parsedGithub = parseGithubManifestUrl(pkg.manifestUrl);
+  if (parsedGithub && githubApiBudget && consumeGithubApiBudget(githubApiBudget)) {
+    const tagResolution = await resolveGithubReleaseTag(
+      parsedGithub,
+      fetchImpl,
+      signal
+    );
+    if (tagResolution.ok) {
+      const releaseUrl =
+        `https://raw.githubusercontent.com/${parsedGithub.owner}/` +
+        `${parsedGithub.repo}/${tagResolution.tagName}/${parsedGithub.filename}`;
+      const releaseAttempt = await attemptManifestFetch(
+        releaseUrl,
         fetchImpl,
         signal
       );
-      if (tagResolution.ok) {
-        const releaseUrl =
-          `https://raw.githubusercontent.com/${parsedGithub.owner}/` +
-          `${parsedGithub.repo}/${tagResolution.tagName}/${parsedGithub.filename}`;
-        const releaseAttempt = await attemptManifestFetch(
-          releaseUrl,
-          fetchImpl,
-          signal
-        );
-        if (releaseAttempt.ok) {
-          return buildOkResult(pkg, releaseAttempt.manifest, "release");
-        }
+      if (releaseAttempt.ok) {
+        return buildOkResult(pkg, releaseAttempt.manifest, "release");
       }
     }
   }
@@ -490,11 +513,12 @@ export async function fetchPackageManifest(pkg, options = {}) {
 
   // Governing: SPEC-0002 REQ "Error Handling Standards" — when both attempts
   // fail, the diagnostic says so explicitly, rather than reading like an
-  // untried package.
+  // untried package. Named after the actual fallback URL used (varies by
+  // host, ADR-0008 Amendment) rather than hardcoding GitHub's.
   return errorResult(
     pkg,
     `Declared manifest URL failed: ${declaredAttempt.message}. Fallback ` +
-      `(raw.githubusercontent.com) also failed: ${fallbackAttempt.message}`
+      `(${fallbackUrl}) also failed: ${fallbackAttempt.message}`
   );
 }
 
