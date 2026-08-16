@@ -307,6 +307,44 @@ need the "possibly unmaintained" classification at all.
   needlessly burns rate-limit budget on packages that already pass the
   verified check and can never reach "possibly unmaintained" status.
 
+### Link-out fields fall back to the locally-installed manifest
+
+**Choice**: `url`/`bugs`/`changelog` are resolved per field, preferring the
+freshly-*fetched* remote manifest and falling back to the same field on the
+*locally-installed* manifest (already parsed by Foundry from
+`module.json`/`system.json` at world-load time — no network call) when the
+fetched manifest doesn't supply it, including the case where the fetch
+failed entirely ("Couldn't check").
+
+**Rationale**: Before this, a package whose remote manifest couldn't be
+fetched got `links: null` outright — even though the *installed* copy of
+that exact manifest, sitting on disk with no network dependency, usually
+declares the same `url`/`bugs`/`changelog` fields. In practice this hit
+non-GitHub-hosted packages hardest (e.g. GitLab CI-artifact-only manifests
+with no CORS-open fallback, ADR-0008), which land on "Couldn't check" far
+more often than GitHub-hosted ones — so the checker table was silently
+withholding exactly the link a GM would want most when a status says "we
+couldn't verify this, go look yourself." `url`/`bugs`/`changelog` are
+static repo-location metadata, not a compatibility claim, so surfacing the
+installed copy doesn't touch CLAUDE.md rule 4 ("dev-declared, not
+tested") — it's the same developer-declared field, just read from a
+locally-available copy instead of a remote one that happened to be
+unreachable this session.
+
+**Alternatives considered**:
+- Leave `links: null` on any fetch failure (status quo): rejected — this is
+  the exact gap reported (non-GitHub-hosted packages losing their only
+  link-out data whenever the remote fetch fails, which for some hosts is
+  the common case, not an edge case).
+- Only fall back when the *whole* remote fetch failed, not per missing
+  field: rejected — a manifest that declares `url` but omits `changelog`
+  would still lose a changelog link the installed copy has, for no reason
+  tied to reachability.
+- Prefer the installed manifest over the remote one: rejected — the remote
+  manifest is the more current declared data when reachable; preferring
+  installed would let a stale local copy shadow an up-to-date `url` a
+  developer had since changed.
+
 ## Architecture
 
 ```mermaid
