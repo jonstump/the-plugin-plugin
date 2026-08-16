@@ -195,9 +195,17 @@ equivalent evidence to a declared `compatibility.maximum` ceiling.
 ### Requirement: Checker Table
 
 The system SHALL provide a GM-only ApplicationV2 window listing every
-active package with its title, installed version, latest published
+active **module** with its title, installed version, latest published
 version, verified core version, and status.
 
+- The active game system MUST NOT be rendered as a row in this window,
+  per ADR-0007. Its manifest is still fetched (REQ "Manifest Check") and
+  its `compatibility.verified` still participates in peer inference (REQ
+  "Inferred Latest Version") — only the checker table's rendered row list
+  excludes it. Including it as a full row with its own GM-facing status
+  label implied the module was tracking system updates as a first-class
+  concern, which was never the design; the system's data was only ever
+  needed as one more peer-inference signal.
 - The system MUST use the following status labels, and MUST NOT use
   language implying a package is "dead", "broken", or "abandoned":
   - Up to date & verified
@@ -236,6 +244,13 @@ version, verified core version, and status.
   is not a GitHub repository URL
 - **THEN** the system omits the "report issue" link-out button for that
   row rather than rendering a broken link
+
+#### Scenario: Game system is not rendered as a row
+
+- **WHEN** the checker table renders its rows
+- **THEN** no row corresponds to the active game system, regardless of its
+  own compatibility status — its manifest was still fetched and its
+  `compatibility.verified` still participated in peer inference
 
 #### Scenario: Verified compatibility with unknown update availability
 
