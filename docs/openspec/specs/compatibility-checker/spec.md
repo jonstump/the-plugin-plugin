@@ -1,7 +1,7 @@
 ---
 status: approved
 date: 2026-08-15
-implements: [ADR-0001, ADR-0002]
+implements: [ADR-0001, ADR-0002, ADR-0004]
 ---
 
 # SPEC-0001: Compatibility Checker
@@ -10,12 +10,16 @@ implements: [ADR-0001, ADR-0002]
 
 The Plugin Plugin's core v1 capability: an in-world, GM-only checker that
 reports update availability and Foundry-version compatibility for every
-active module and the game system, using only data already published in
-each package's own manifest — no server component, no crowdsourced data,
-no credentials. See ADR-0001 (how a likely-newer Foundry version is
-inferred without contacting foundryvtt.com) and ADR-0002 (how that
-inference is turned into severity without over-alarming on ordinary
-manifest staleness).
+active module and the game system — no server component, no crowdsourced
+data, no credentials.
+
+The comparison target comes from `game.data.coreUpdate`, which Foundry's
+own server populates in-world, with peer inference across installed
+manifests as the fallback (ADR-0001, amended 2026-08-15). Everything else
+is read from each package's own published manifest. See ADR-0002 (how a
+version gap becomes severity without over-alarming on ordinary manifest
+staleness) and ADR-0004 (how "possibly unmaintained" is evidenced by
+repository activity rather than by repeated observation).
 
 ## Requirements
 
