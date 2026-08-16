@@ -7,22 +7,34 @@ pre-login Setup screen, so GMs who stay logged into their world never see
 it. This capability closes that gap by running the same kind of check
 in-world, GM-only, entirely client-side.
 
-Two accepted ADRs constrain this design directly:
+Accepted ADRs constrain this design directly:
 
-- **ADR-0001**: there is no reliable, credential-free way to ask Foundry
-  itself for the latest core version from inside a running world (tested:
-  no CORS-open unauthenticated endpoint exists, and the one endpoint that
-  is CORS-open requires a privileged license-derived key we're barred from
-  collecting). Instead, `inferredLatest` is derived from the highest
-  `compatibility.verified` already declared across the GM's own installed
-  packages — data already being fetched for the core update check, so this
-  costs nothing new.
+- **ADR-0001** (as amended 2026-08-15): Foundry *does* expose the latest
+  core version to a running world, at `game.data.coreUpdate.version` — the
+  local Node server performs the license-authenticated check and relays the
+  result into the client's game data, so the module reads it without any
+  network request, credential, or CORS exposure. The comparison target is
+  therefore authoritative when available. Peer inference (`inferredLatest`,
+  the highest `compatibility.verified` across the GM's installed packages)
+  is retained as the **fallback** for when `couldReachWebsite` is `false`
+  or the payload is absent.
+
+  *Earlier revisions of this document asserted the opposite — that no such
+  field existed. That claim originated in
+  `docs/research/foundry-version-detection.md`, which never enumerated
+  `game.data` before asserting the absence. Both documents now carry dated
+  corrections.*
 - **ADR-0002**: a `compatibility.verified` lag alone is weak evidence — it
   usually just means a developer hasn't updated manifest bookkeeping, not
   that their package is broken. Severity escalation (toasts, summary
   "problem" counts) is gated on `compatibility.maximum`, Foundry's own
   hard ceiling, which is an actual developer claim rather than an
   inference.
+- **ADR-0004**: the "possibly unmaintained" heuristic measures repository
+  activity age, not whether a version string changed between two checks.
+  The earlier signal fired on the second check of any session regardless of
+  real staleness, which risked exactly the false accusation ADR-0002 exists
+  to prevent.
 
 `docs/research/mcc-research.md` documents the prior art this design
 deliberately diverges from: `arcanistzed/mcc` depended on a Cloudflare
@@ -75,11 +87,42 @@ browser-rendered UI a GM interacts with directly.
 
 ## Decisions
 
+### The comparison target is read, not inferred, whenever Foundry supplies it
+
+**Choice**: Take the comparison target from `game.data.coreUpdate.version`,
+falling back to peer inference only when `couldReachWebsite` is `false` or
+the payload is absent.
+
+**Rationale**: Foundry's own server already ran the license-authenticated
+update check and put the answer in the client's game data. Inferring a
+value we can simply read would be strictly worse: less accurate, and no
+cheaper — reading costs zero requests.
+
+Two field-level traps are load-bearing enough to state here rather than
+leave to implementation, because both fail *silently*:
+
+- **`hasUpdate` is not the signal.** It reported `false` on a world running
+  13.351 while `version` reported `14.366`, apparently scoped to the
+  running generation. Gating on it would suppress precisely the
+  cross-generation signal this capability exists to surface. Compare
+  `coreUpdate.version` to `game.release.version` directly.
+- **`couldReachWebsite: false` means unknown, not current.** Treating a
+  failed check as "you're up to date" would assert the one thing ADR-0001
+  has always refused to assert.
+
+**Alternatives considered**:
+- Keep peer inference as the primary mechanism: rejected — it was only ever
+  a workaround for a constraint that does not exist.
+- Drop peer inference entirely: rejected — `couldReachWebsite` can be
+  `false` on an offline or firewalled server, and inference degrades
+  gracefully to "no evidence" there, which is better than no target at all.
+
 ### `inferredLatest` computed from the same fetch pass as the update check
 
-**Choice**: `inferredLatest` is computed as a pure derived value —
-`max(compatibility.verified)` across all manifests already fetched for the
-Requirement: Manifest Check pass — rather than a separate fetch or check.
+**Choice**: When used as the fallback, `inferredLatest` is computed as a
+pure derived value — `max(compatibility.verified)` across all manifests
+already fetched for the Requirement: Manifest Check pass — rather than a
+separate fetch or check.
 
 **Rationale**: Zero additional network cost, and it keeps the "no new
 infrastructure" property from ADR-0001 literally true in the
@@ -90,6 +133,30 @@ implementation, not just the decision record.
   packages: rejected — adds a second fetch pass and a maintained list of
   bellwether package IDs for no benefit over just using everything the GM
   already has installed.
+
+### Maintenance is measured on the repository, not on our own observations
+
+**Choice**: The "possibly unmaintained" heuristic reads `pushed_at` from
+the same `GET /repos/{owner}/{repo}` response already fetched for
+`archived`, and flags at 12 months of no activity.
+
+**Rationale**: The prior signal — "the version string did not change
+between two checks" — measured the observer, not the project. It fired on
+the second check of any session, which is why a maintained package was
+mislabeled in live testing (issue #22). Repository activity is a property
+of the project itself and is available on the first check a world ever
+runs, with no stored baseline and no extra request.
+
+This also retires the `previousPackageVersions` world setting, whose only
+consumer was the frozen-version comparison.
+
+**Alternatives considered**:
+- Add an elapsed-time floor to the stored version baseline: rejected —
+  requires changing a live world setting's shape plus a migration, and
+  cannot fire until a baseline ages, so a fresh install learns nothing for
+  a year.
+- Require `archived` alone: rejected — most dormant projects are never
+  archived, so the heuristic would almost never fire.
 
 ### Severity is a derived classification, not a stored field
 
@@ -132,31 +199,56 @@ need the "possibly unmaintained" classification at all.
 sequenceDiagram
     participant GM as GM (browser)
     participant App as Checker (ApplicationV2)
+    participant FD as game.data (already in client)
     participant Cache as Session cache
     participant Pkg as Package manifest URLs
-    participant GH as GitHub API (archived field)
+    participant GH as GitHub API (repos endpoint)
 
     GM->>App: Open checker / world ready
+    App->>FD: Read coreUpdate (no network request)
+    alt couldReachWebsite && version present
+        FD-->>App: authoritative target (compare vs game.release.version,<br/>NOT vs hasUpdate)
+    else unreachable or absent
+        FD-->>App: unknown -> fall back to peer inference
+    end
     App->>Cache: Check for cached results
     alt cache miss or explicit re-check
         App->>Pkg: Fetch manifest (concurrency-limited)
         Pkg-->>App: manifest JSON or error, per package
-        App->>App: Compute inferredLatest = max(verified) across all
-        App->>App: Classify each package: severity (hard/soft) vs game.release and inferredLatest
-        App->>GH: archived? (only for packages failing verified check)
-        GH-->>App: archived: true/false, or failure -> "unknown"
+        opt no authoritative target
+            App->>App: inferredLatest = max(verified) across all (fallback)
+        end
+        App->>App: Classify severity (hard/soft) vs game.release and the target
+        App->>GH: GET /repos/{owner}/{repo} — one request,<br/>only for packages failing the verified check
+        GH-->>App: archived + pushed_at, or failure -> "unknown"
+        App->>App: possibly-unmaintained = archived OR pushed_at older than 12 months
         App->>Cache: Store results for session
     end
     App-->>GM: Render checker table
     App-->>GM: Whispered chat summary + toast (hard-severity/unmaintained pinned modules only)
 ```
 
+The GitHub interaction is deliberately drawn as a **single** request
+yielding both signals — issuing a second call for activity age would spend
+rate-limit budget on data already in hand (ADR-0004).
+
 ## Risks / Trade-offs
 
 - **`inferredLatest` produces false negatives when the GM's whole modlist
-  is uniformly behind** → Accepted per ADR-0001: this degrades to "no
-  peer signal," identical to having no target-version check at all, not a
-  false "you're all set."
+  is uniformly behind** → Accepted per ADR-0001, and now much rarer: this
+  only applies on the fallback path, when Foundry's own update check was
+  unreachable. It still degrades to "no peer signal," identical to having
+  no target-version check at all, not a false "you're all set."
+- **The authoritative target depends on a Foundry-internal data shape**
+  (`game.data.coreUpdate`) rather than a documented module API → Accepted:
+  the fallback already exists and covers a missing or renamed payload, so
+  the failure mode is degradation to inference rather than breakage. Worth
+  re-checking on each Foundry generation.
+- **The unmaintained heuristic is silent for non-GitHub packages** →
+  Accepted per ADR-0004: activity age is only observable for GitHub-hosted
+  repositories, so GitLab and self-hosted packages yield "unknown"
+  permanently. This trades breadth for correctness — the previous
+  host-agnostic signal was wrong everywhere rather than silent somewhere.
 - **Hard/soft severity under-flags real breakage when a developer knew
   about it but never set `compatibility.maximum`** → Accepted per
   ADR-0002: erring toward not nagging over erring toward alarming on an

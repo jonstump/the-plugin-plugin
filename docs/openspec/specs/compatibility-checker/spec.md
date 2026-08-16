@@ -1,7 +1,7 @@
 ---
 status: approved
 date: 2026-08-15
-implements: [ADR-0001, ADR-0002]
+implements: [ADR-0001, ADR-0002, ADR-0004]
 ---
 
 # SPEC-0001: Compatibility Checker
@@ -10,12 +10,16 @@ implements: [ADR-0001, ADR-0002]
 
 The Plugin Plugin's core v1 capability: an in-world, GM-only checker that
 reports update availability and Foundry-version compatibility for every
-active module and the game system, using only data already published in
-each package's own manifest — no server component, no crowdsourced data,
-no credentials. See ADR-0001 (how a likely-newer Foundry version is
-inferred without contacting foundryvtt.com) and ADR-0002 (how that
-inference is turned into severity without over-alarming on ordinary
-manifest staleness).
+active module and the game system — no server component, no crowdsourced
+data, no credentials.
+
+The comparison target comes from `game.data.coreUpdate`, which Foundry's
+own server populates in-world, with peer inference across installed
+manifests as the fallback (ADR-0001, amended 2026-08-15). Everything else
+is read from each package's own published manifest. See ADR-0002 (how a
+version gap becomes severity without over-alarming on ordinary manifest
+staleness) and ADR-0004 (how "possibly unmaintained" is evidenced by
+repository activity rather than by repeated observation).
 
 ## Requirements
 
@@ -55,22 +59,77 @@ the package's locally installed data.
 - **THEN** the system uses `compatibleCoreVersion` in place of
   `compatibility.verified` for every comparison in this spec
 
+### Requirement: Target Version Determination
+
+The system SHALL determine the comparison target — the Foundry version a
+package's `compatibility.verified` is measured against, beyond the running
+`game.release` — from `game.data.coreUpdate`, which the Foundry server
+populates in-world (per ADR-0001 as amended 2026-08-15). The system MUST
+fall back to the peer inference in REQ "Inferred Latest Version" only when
+that source is unavailable.
+
+- The system MUST use `game.data.coreUpdate.version` as the target version
+  when `game.data.coreUpdate.couldReachWebsite` is `true` and `version` is
+  present.
+- The system MUST determine whether that target is newer by comparing
+  `coreUpdate.version` against `game.release.version` directly. The system
+  MUST NOT gate this on `coreUpdate.hasUpdate`, which is scoped to the
+  running generation and reports `false` even when a newer generation
+  exists.
+- The system MUST treat `couldReachWebsite: false`, or an absent
+  `coreUpdate` payload, as "unknown" — not as evidence that the running
+  version is current — and MUST fall back to REQ "Inferred Latest Version".
+- Reading `game.data.coreUpdate` MUST NOT involve any network request by
+  this module.
+
+#### Scenario: Authoritative target available
+
+- **WHEN** `game.data.coreUpdate.couldReachWebsite` is `true` and
+  `coreUpdate.version` is newer than `game.release.version`
+- **THEN** the system uses `coreUpdate.version` as the comparison target
+  and does not compute a peer-inferred target
+
+#### Scenario: Newer generation while `hasUpdate` is false
+
+- **WHEN** `coreUpdate.version` is newer than `game.release.version` but
+  `coreUpdate.hasUpdate` is `false`
+- **THEN** the system still treats `coreUpdate.version` as the target,
+  because `hasUpdate` describes only the running generation
+
+#### Scenario: Foundry could not reach its update service
+
+- **WHEN** `game.data.coreUpdate.couldReachWebsite` is `false`, or the
+  `coreUpdate` payload is absent
+- **THEN** the system falls back to REQ "Inferred Latest Version" and MUST
+  NOT report that the running version is current
+
 ### Requirement: Inferred Latest Version
 
-The system SHALL compute `inferredLatest`, a stand-in for "a newer Foundry
-generation likely exists," as the highest `compatibility.verified` value
-observed across the fetched manifests of every active package and the
-active game system (per ADR-0001). The system MUST NOT contact
-foundryvtt.com, or any third-party service, to determine the latest
-Foundry version.
+When no authoritative target is available (see REQ "Target Version
+Determination"), the system SHALL compute `inferredLatest`, a stand-in for
+"a newer Foundry generation likely exists," as the highest
+`compatibility.verified` value observed across the fetched manifests of
+every active package and the active game system (per ADR-0001). The system
+MUST NOT contact foundryvtt.com, or any third-party service, to determine
+the latest Foundry version.
 
 - The system MUST compare each package's own `compatibility.verified`
-  against both `game.release` and `inferredLatest`.
+  against both `game.release` and the active comparison target.
 - The system MUST treat `inferredLatest` as advisory, not authoritative:
   when no installed package's manifest declares a `compatibility.verified`
   higher than `game.release`, the system MUST report no evidence of a
   newer Foundry generation rather than asserting the running version is
   the latest one that exists.
+- The system MUST distinguish an authoritative target from an inferred one
+  wherever the target version is surfaced to the GM, so an inference is
+  never presented as fact.
+
+#### Scenario: Inferred target is labelled as inference
+
+- **WHEN** the comparison target came from peer inference rather than
+  `game.data.coreUpdate`
+- **THEN** the GM-facing presentation identifies it as inferred rather than
+  as the confirmed latest Foundry version
 
 #### Scenario: Peer signal exists
 
@@ -164,36 +223,67 @@ of the following hold, and MUST NOT use this label, or any harsher one,
 based on either condition alone:
 
 - The package is already failing the verified-compatibility check (its
-  `compatibility.verified` verifies neither `game.release` nor
-  `inferredLatest`), AND
-- Across checks, the package's fetched manifest `version` has not changed,
-  OR the package's GitHub repository is archived (queried via the
-  unauthenticated GitHub API `archived` field, subject to rate limits).
+  `compatibility.verified` verifies neither `game.release` nor the active
+  comparison target), AND
+- The package's GitHub repository is archived, OR that repository has had
+  no pushed activity for at least 12 months (per ADR-0004).
 
-The system MUST treat a GitHub API failure for this check as "unknown"
-rather than as evidence toward or against the heuristic, and MUST only
-query the GitHub API for packages already failing the verified check.
+Both signals are read from a single unauthenticated
+`GET /repos/{owner}/{repo}` request — the same request, not two. The system
+MUST NOT issue an additional request to obtain activity age.
 
-#### Scenario: Both signals present
+- The system MUST derive activity age from the repository's `pushed_at`
+  field. The system MUST NOT use `updated_at`, which advances on metadata
+  changes such as stars or description edits and therefore does not
+  indicate maintenance.
+- The system MUST NOT use elapsed time between checks, or any other value
+  that varies with when or how often a GM ran a check, as evidence toward
+  this flag.
+- The system MUST treat a GitHub API failure, or a package not hosted on
+  GitHub, as "unknown" — evidence toward neither side.
+- The system MUST only query the GitHub API for packages already failing
+  the verified check.
+
+#### Scenario: Archived repository
 
 - **WHEN** a package fails the verified-compatibility check and its
   GitHub repository is archived
 - **THEN** the system classifies the package as "possibly unmaintained"
 
-#### Scenario: Only one signal present
+#### Scenario: Dormant repository
+
+- **WHEN** a package fails the verified-compatibility check and its
+  repository's `pushed_at` is at least 12 months old
+- **THEN** the system classifies the package as "possibly unmaintained"
+
+#### Scenario: Recently active repository
 
 - **WHEN** a package fails the verified-compatibility check but its
-  version has changed across checks and its repository is not archived
-  (or is not hosted on GitHub)
+  repository was pushed to within the last 12 months and is not archived
 - **THEN** the system does not classify the package as "possibly
-  unmaintained"
+  unmaintained", however many times it has been checked
+
+#### Scenario: Repeated checks in quick succession
+
+- **WHEN** the checker runs twice within one session against a
+  recently-active, non-archived package that fails the verified check
+- **THEN** the second check produces the same result as the first, and
+  neither classifies the package as "possibly unmaintained"
 
 #### Scenario: GitHub API failure
 
-- **WHEN** the GitHub API request for a package's `archived` field fails
+- **WHEN** the GitHub API request for a package's repository data fails
   or is rate-limited
-- **THEN** the system treats that signal as "unknown" and does not
-  classify the package as "possibly unmaintained" on that basis alone
+- **THEN** the system treats both the archived and activity-age signals as
+  "unknown" and does not classify the package as "possibly unmaintained"
+  on that basis alone
+
+#### Scenario: Package not hosted on GitHub
+
+- **WHEN** a package fails the verified-compatibility check but its
+  declared URLs do not identify a GitHub repository
+- **THEN** the system treats both signals as "unknown" and does not
+  classify the package as "possibly unmaintained"
 
 ### Requirement: Pinned Critical Modules
 
