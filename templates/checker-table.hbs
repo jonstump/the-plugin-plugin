@@ -72,7 +72,24 @@
               <i class="fa-{{#if row.isPinned}}solid{{else}}regular{{/if}} fa-star" aria-hidden="true"></i>
             </button>
           </td>
-          <td class="col-package">{{row.title}}</td>
+          <td class="col-package">
+            {{row.title}}
+            {{! Governing: SPEC-0002 REQ "Result Provenance" — a
+                fallback-sourced row (ADR-0003: read from the repository's
+                default branch, not a published release) is visually
+                distinguished here; a declared-sourced row (row.provenance is
+                null) renders no marking at all. The source is named in
+                visible text (not an icon-only mark), so this satisfies the
+                Accessibility Requirements' "text alternative naming the
+                source specifically" / "MUST NOT rely on colour, position, or
+                shape alone" without any extra aria-label. }}
+            {{#if row.provenance}}
+            <span class="provenance-badge {{row.provenance.statusClass}}">
+              <i class="fa-solid {{row.provenance.iconClass}}" aria-hidden="true"></i>
+              {{row.provenance.note}}
+            </span>
+            {{/if}}
+          </td>
           <td class="col-installed">{{row.installedVersion}}</td>
           <td class="col-latest">{{row.latestVersion}}</td>
           <td class="col-verified">{{row.verified}}</td>
