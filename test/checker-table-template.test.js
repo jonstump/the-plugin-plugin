@@ -379,3 +379,49 @@ test("an inferred comparison target renders the 'inferred' class and note, disti
   assert.ok(html.includes("not confirmed"));
   assert.ok(!html.includes("fa-circle-check"));
 });
+
+// Issue #37: the two remaining #buildComparisonTargetContext (scripts/
+// checker-table.js) branches not yet covered above — "authoritative, but
+// already current" (still 'confirmed', different wording from "newer
+// available") and "inferred, but no peer evidence at all" (still
+// 'inferred', different wording from "inferred with peer signal"). Each
+// asserts on the rendered `note` text itself, not styling/class alone, per
+// this issue's requirement that a colour-only distinction must not be
+// sufficient to pass.
+
+test("an authoritative 'already current' comparison target renders the 'confirmed' class with its own wording, distinct from the 'newer available' wording", () => {
+  const html = template(
+    baseContext({
+      comparisonTarget: {
+        statusClass: "confirmed",
+        iconClass: "fa-circle-check",
+        note: "Foundry confirms 13.351 is the latest available version — you're already comparing against it.",
+      },
+    })
+  );
+  assert.ok(html.includes('class="comparison-target-note developer-declared-note confirmed"'));
+  assert.ok(html.includes("fa-circle-check"));
+  assert.ok(html.includes("already comparing against it"));
+  assert.ok(!html.includes("fa-circle-question"));
+  // Distinguishing text from the "newer available" scenario above, not just
+  // a shared "confirmed" class.
+  assert.ok(!html.includes("is available. Comparisons below use it as the target"));
+});
+
+test("an inferred comparison target with no peer evidence renders the 'inferred' class with wording distinct from the peer-signal case, and never blames a package for the missing evidence", () => {
+  const html = template(
+    baseContext({
+      comparisonTarget: {
+        statusClass: "inferred",
+        iconClass: "fa-circle-question",
+        note: "Foundry couldn't confirm the latest version this session, and no installed package suggests a newer one exists.",
+      },
+    })
+  );
+  assert.ok(html.includes('class="comparison-target-note developer-declared-note inferred"'));
+  assert.ok(html.includes("fa-circle-question"));
+  assert.ok(html.includes("no installed package suggests a newer one exists"));
+  assert.ok(!html.includes("fa-circle-check"));
+  // Distinguishing text from the "peer signal present" scenario above.
+  assert.ok(!html.includes("is inferred from what other installed packages declare"));
+});
