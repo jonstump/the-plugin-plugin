@@ -234,9 +234,19 @@ export function shouldShowToast(pinnedModuleIds, packages) {
  * Reduces classified packages to the counts the chat summary reports.
  * `hardIssues`/`possiblyUnmaintained` are the "problem" figures per
  * ADR-0002/SPEC-0001 (soft severity is shown separately, never folded into
- * "issues"). `upToDate` requires no update, no severity, and no
- * possibly-unmaintained flag — a package with only a plain update available
- * isn't a compatibility "issue" but also isn't reported as fully clean.
+ * "issues"). `upToDate` requires no severity, no possibly-unmaintained flag,
+ * and a *known* `updateAvailable === false` — a package with only a plain
+ * update available isn't a compatibility "issue" but also isn't reported as
+ * fully clean.
+ *
+ * Per ADR-0006, `updateAvailable === null` (unknown — most commonly a
+ * fallback-sourced result, SPEC-0002 REQ "Fallback Field Trust") is counted
+ * separately as `verifiedUpdateUnknown`, not folded into `upToDate`. Before
+ * this, a package the checker table now labels "Verified, update unknown"
+ * would still have been counted here as "up to date," making the chat
+ * summary and the table disagree about the same package — exactly the
+ * confidence-it-doesn't-have claim ADR-0006 exists to stop, just one layer
+ * up.
  */
 export function summarizeCompatibilityResults(packages) {
   const summary = {
@@ -246,6 +256,7 @@ export function summarizeCompatibilityResults(packages) {
     hardIssues: 0,
     softIssues: 0,
     possiblyUnmaintained: 0,
+    verifiedUpdateUnknown: 0,
     couldntCheck: 0,
   };
 
@@ -259,12 +270,12 @@ export function summarizeCompatibilityResults(packages) {
     if (pkg.severity === "hard") summary.hardIssues++;
     else if (pkg.severity === "soft") summary.softIssues++;
 
-    if (
-      !pkg.updateAvailable &&
-      pkg.severity == null &&
-      !pkg.possiblyUnmaintained
-    ) {
-      summary.upToDate++;
+    if (pkg.severity == null && !pkg.possiblyUnmaintained) {
+      if (pkg.updateAvailable === false) {
+        summary.upToDate++;
+      } else if (pkg.updateAvailable == null) {
+        summary.verifiedUpdateUnknown++;
+      }
     }
   }
 
@@ -273,20 +284,21 @@ export function summarizeCompatibilityResults(packages) {
 
 /**
  * Fixed left-to-right order the structured per-status list renders in —
- * same order as the checker table's own five-item taxonomy (see
- * `STATUS_LABEL_KEYS` in checker-table-logic.js), so a GM who has looked at
- * the checker window recognizes the list immediately.
+ * same order as the checker table's own six-item taxonomy (see
+ * `STATUS_LABEL_KEYS` in checker-table-logic.js; six as of ADR-0006), so a
+ * GM who has looked at the checker window recognizes the list immediately.
  */
 const STATUS_COUNT_ORDER = [
   STATUS_LABEL_KEYS.UP_TO_DATE,
   STATUS_LABEL_KEYS.UPDATE_AVAILABLE,
   STATUS_LABEL_KEYS.NOT_YET_VERIFIED,
   STATUS_LABEL_KEYS.POSSIBLY_UNMAINTAINED,
+  STATUS_LABEL_KEYS.VERIFIED_UPDATE_UNKNOWN,
   STATUS_LABEL_KEYS.COULDNT_CHECK,
 ];
 
 /**
- * Maps `summarizeCompatibilityResults`' output onto the shared five-item
+ * Maps `summarizeCompatibilityResults`' output onto the shared six-item
  * status taxonomy (`STATUS_LABEL_KEYS`/`STATUS_LABEL_I18N_KEYS` in
  * checker-table-logic.js — reused rather than reimplemented, per issue #51)
  * so the chat summary's structured list uses the exact same labels and
@@ -298,7 +310,7 @@ const STATUS_COUNT_ORDER = [
  * only ever visually (not textually) distinguished.
  *
  * Governing: SPEC-0001 REQ "Login Notification" ("per-status counts ... as
- * a structured list rather than a single prose sentence").
+ * a structured list rather than a single prose sentence"), ADR-0006.
  *
  * @param {ReturnType<typeof summarizeCompatibilityResults>} summary
  * @returns {Array<{statusLabelKey: string, i18nKey: string, count: number}>}
@@ -309,6 +321,7 @@ export function buildStatusCountEntries(summary) {
     [STATUS_LABEL_KEYS.UPDATE_AVAILABLE]: summary?.updatesAvailable ?? 0,
     [STATUS_LABEL_KEYS.NOT_YET_VERIFIED]: (summary?.hardIssues ?? 0) + (summary?.softIssues ?? 0),
     [STATUS_LABEL_KEYS.POSSIBLY_UNMAINTAINED]: summary?.possiblyUnmaintained ?? 0,
+    [STATUS_LABEL_KEYS.VERIFIED_UPDATE_UNKNOWN]: summary?.verifiedUpdateUnknown ?? 0,
     [STATUS_LABEL_KEYS.COULDNT_CHECK]: summary?.couldntCheck ?? 0,
   };
 

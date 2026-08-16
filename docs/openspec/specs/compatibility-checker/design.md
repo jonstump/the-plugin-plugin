@@ -261,6 +261,32 @@ every time.
   the classification computation itself is cheap (a version-string
   comparison, not a network call).
 
+### A sixth status distinguishes "no data" from "verified, update unknown"
+
+**Choice**: Add "Verified, update unknown" as a sixth checker-table status
+(ADR-0006), rather than reusing "Couldn't check" for a package whose
+compatibility is fully known but whose update availability isn't.
+
+**Rationale**: Issue #48 correctly stopped a fallback-sourced package's
+stale, tooling-stamped `version` from being read as evidence of currency —
+but the fix's own follow-on choice mapped that unknown state onto
+"Couldn't check," which per ADR-0003's real-world measurement is the *more
+common* outcome for a fallback-resolved package, not a rare edge case. That
+collapsed a large share of the table into a label meaning "no reliable data
+at all," even though `compatibility.verified`, severity, and links were all
+still correctly known for those rows. A checker table that reads mostly
+"Couldn't check" misrepresents how much it actually knows.
+
+**Alternatives considered**:
+- Keep "Couldn't check": rejected — conflates total fetch failure with
+  partial fallback success, the exact problem this decision exists to fix.
+- Revert to "Up to date & verified": rejected — reintroduces issue #48's
+  original false-negative.
+- Per-row tooltip instead of a new label: rejected — more UI surface for
+  less clarity than a plain-language label already does elsewhere in the
+  same taxonomy; the provenance badge already explains *why* (fallback),
+  this status explains *what that means for confidence*, a distinct fact.
+
 ### GitHub `archived` lookup is scoped to already-failing packages only
 
 **Choice**: The "possibly unmaintained" heuristic only queries the GitHub

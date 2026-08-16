@@ -73,23 +73,25 @@ test("deriveStatusLabelKey: up to date & verified is the default", () => {
   assert.equal(deriveStatusLabelKey(pkg), STATUS_LABEL_KEYS.UP_TO_DATE);
 });
 
-// --- Unknown update availability (issue #48, SPEC-0002 REQ "Fallback Field
-// Trust") — manifest-fetcher.js now returns `updateAvailable: null` (never
-// `false`) for a fallback-sourced result whose `version` can't be trusted.
-// `if (pkg.updateAvailable)` alone is falsy for both `null` and `false`, so
-// without this precedence change an otherwise-clean fallback-sourced row
-// would silently fall through to "Up to date & verified" — the exact false
-// claim this issue exists to stop (real case: installed 0.9.8,
-// fallback-sourced `version` 0.5.1, actual latest release 4.0.0). See the
-// judgment-call note above `deriveStatusLabelKey` for why "Couldn't check"
-// was chosen over the other three remaining labels.
+// --- Unknown update availability (issue #48 / ADR-0006, SPEC-0002 REQ
+// "Fallback Field Trust") — manifest-fetcher.js returns
+// `updateAvailable: null` (never `false`) for a fallback-sourced result
+// whose `version` can't be trusted. `if (pkg.updateAvailable)` alone is
+// falsy for both `null` and `false`, so without this precedence change an
+// otherwise-clean fallback-sourced row would silently fall through to
+// "Up to date & verified" — the exact false claim issue #48 exists to stop
+// (real case: installed 0.9.8, fallback-sourced `version` 0.5.1, actual
+// latest release 4.0.0). ADR-0006 further requires this NOT collapse into
+// "Couldn't check" either, since real-world fallback resolution is the
+// *common* case (ADR-0003), not a rare edge — see the judgment-call note
+// above `deriveStatusLabelKey`.
 
-test("deriveStatusLabelKey: unknown update availability (updateAvailable === null) with nothing else wrong resolves to Couldn't check, never Up to date (issue #48 judgment call)", () => {
+test("deriveStatusLabelKey: unknown update availability (updateAvailable === null) with nothing else wrong resolves to Verified, update unknown — never Up to date, never Couldn't check (ADR-0006)", () => {
   const pkg = okPkg({ updateAvailable: null, latestVersion: null, provenance: "fallback" });
-  assert.equal(deriveStatusLabelKey(pkg), STATUS_LABEL_KEYS.COULDNT_CHECK);
+  assert.equal(deriveStatusLabelKey(pkg), STATUS_LABEL_KEYS.VERIFIED_UPDATE_UNKNOWN);
 });
 
-test("deriveStatusLabelKey: a known, confirmed non-update (updateAvailable === false) still resolves to Up to date & verified — only null (unknown) triggers Couldn't check, not false", () => {
+test("deriveStatusLabelKey: a known, confirmed non-update (updateAvailable === false) still resolves to Up to date & verified — only null (unknown) triggers Verified/update-unknown, not false", () => {
   const pkg = okPkg({ updateAvailable: false });
   assert.equal(deriveStatusLabelKey(pkg), STATUS_LABEL_KEYS.UP_TO_DATE);
 });
@@ -100,6 +102,17 @@ test("deriveStatusLabelKey: unknown update availability does not override possib
 
   const severe = okPkg({ updateAvailable: null, severity: "hard" });
   assert.equal(deriveStatusLabelKey(severe), STATUS_LABEL_KEYS.NOT_YET_VERIFIED);
+});
+
+test("deriveStatusLabelKey: unknown update availability is distinct from a total fetch failure (ADR-0006 — the whole point of the new status)", () => {
+  const fallbackResolved = okPkg({ updateAvailable: null, provenance: "fallback" });
+  const totalFailure = okPkg({ status: "error", error: { packageId: "pkg", message: "boom" } });
+  assert.equal(deriveStatusLabelKey(fallbackResolved), STATUS_LABEL_KEYS.VERIFIED_UPDATE_UNKNOWN);
+  assert.equal(deriveStatusLabelKey(totalFailure), STATUS_LABEL_KEYS.COULDNT_CHECK);
+  assert.notEqual(
+    deriveStatusLabelKey(fallbackResolved),
+    deriveStatusLabelKey(totalFailure)
+  );
 });
 
 test("deriveStatusLabelKey: treats a missing/null package as couldn't check", () => {

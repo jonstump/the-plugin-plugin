@@ -294,11 +294,12 @@ test("a fallback-sourced, otherwise-clean package (installed 0.9.8, fallback ver
   // The actual regression: this row must not read as confidently current.
   assert.notEqual(row.statusLabelKey, "upToDate");
   assert.notEqual(row.statusLabel, "THE-PLUGIN-PLUGIN.Status.UpToDate");
-  // And per the judgment call documented in checker-table-logic.js, it
-  // reads as "Couldn't check" rather than any of the other three remaining
-  // labels.
-  assert.equal(row.statusLabelKey, "couldntCheck");
-  assert.equal(row.statusLabel, "THE-PLUGIN-PLUGIN.Status.CouldntCheck");
+  // Per ADR-0006, it reads as "Verified, update unknown" — distinct from
+  // "Couldn't check" (reserved for a total fetch failure; this row's
+  // compatibility data is fully known and valid, only the update-version
+  // comparison is unknown).
+  assert.equal(row.statusLabelKey, "verifiedUpdateUnknown");
+  assert.equal(row.statusLabel, "THE-PLUGIN-PLUGIN.Status.VerifiedUpdateUnknown");
 
   // The unknown `version` must never be surfaced as a latest-version figure.
   assert.equal(row.latestVersion, "—");
