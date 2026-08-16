@@ -106,6 +106,22 @@
   opacity: 0.85;
 }
 
+/* Login notification chat card — Governing: SPEC-0001 REQ "Login
+ * Notification". The version-context line leads the card (see
+ * login-notification.js's postChatSummary), so it reads as a headline. */
+.the-plugin-plugin-login-summary .the-plugin-plugin-version-context {
+  margin: 0 0 0.5rem 0;
+  font-weight: bold;
+}
+
+.the-plugin-plugin-login-summary .the-plugin-plugin-pinned-list {
+  margin: 0 0 0.75rem 0;
+}
+
+.the-plugin-plugin-login-summary button {
+  margin-top: 0.5rem;
+}
+
 /* Visually hidden but available to screen readers — used for column headers
  * that are otherwise conveyed by icon-only controls in that column. */
 .the-plugin-plugin-checker-table .visually-hidden {
