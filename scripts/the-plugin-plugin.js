@@ -6,7 +6,6 @@ import {
 import {
   classifyActiveCompatibility,
   classifyCompatibility,
-  PREVIOUS_VERSIONS_SETTING_KEY,
 } from "./compatibility-classifier.js";
 import {
   CheckerTableApp,
@@ -23,17 +22,6 @@ const MODULE_ID = "the-plugin-plugin";
 
 Hooks.once("init", () => {
   console.log(`${MODULE_ID} | initializing`);
-
-  // Governing: SPEC-0001 REQ "Possibly Unmaintained Heuristic" — internal
-  // bookkeeping (last-seen manifest version per package, used to detect a
-  // frozen version across logins), not a GM-facing option, hence
-  // `config: false`.
-  game.settings.register(MODULE_ID, PREVIOUS_VERSIONS_SETTING_KEY, {
-    scope: "world",
-    config: false,
-    type: Object,
-    default: {},
-  });
 
   // Governing: SPEC-0001 REQ "Pinned Critical Modules" — world-scoped set of
   // pinned module ids (stored as a plain array; see checker-table.js's
