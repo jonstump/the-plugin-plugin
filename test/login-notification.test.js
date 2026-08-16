@@ -8,6 +8,9 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import path from "node:path";
 
 import {
   fnv1aHash,
@@ -21,6 +24,9 @@ import {
   VERSION_CONTEXT_CASES,
   buildPinnedCallout,
   NOTIFICATION_FREQUENCIES,
+  runLoginNotification,
+  FREQUENCY_SETTING_KEY,
+  PINNED_MODULES_SETTING_KEY,
 } from "../scripts/login-notification.js";
 import { STATUS_LABEL_KEYS } from "../scripts/checker-table-logic.js";
 
@@ -474,4 +480,448 @@ test("buildPinnedCallout: falls back to id when a package has no title", () => {
   const packages = [{ ...pkg({ id: "no-title-mod", severity: "hard" }), title: undefined }];
   const entries = buildPinnedCallout(["no-title-mod"], packages);
   assert.equal(entries[0].title, "no-title-mod");
+});
+
+// ---------------------------------------------------------------------------
+// Glue-layer: `runLoginNotification` -> (private) `postChatSummary` ->
+// `ChatMessage.create`'s `content`. Issue #52.
+//
+// `postChatSummary` is not exported, and reads Foundry globals
+// (`ChatMessage`, `game.i18n`, `game.settings`) that don't exist under Node.
+// `runLoginNotification` IS exported and accepts a pre-built `classification`
+// via `options.classification` (see its signature in
+// scripts/login-notification.js), so no manifest fetching or
+// `classifyActiveCompatibility` stubbing is needed here — only a `game`
+// stub and a `ChatMessage` stub, following the same "stub Foundry globals,
+// exercise the real code path end-to-end" style test/checker-table.test.js
+// already uses for `openCheckerTable`/`CheckerTableApp`.
+//
+// `i18n.localize`/`i18n.format` below are real: they read the actual
+// languages/en.json content and interpolate `{placeholder}` tokens the same
+// way Foundry's i18n does. That (rather than a key-echoing stand-in, as
+// test/checker-table.test.js uses for its own unrelated assertions) is the
+// right call here specifically because most of this issue's requirements
+// are about the exact rendered *wording* (e.g. "an inferred target must
+// never read as confirmed fact") — a stand-in that only echoes the key
+// would leave those assertions checking key names, not content.
+//
+// Governing: SPEC-0001 REQ "Login Notification".
+// ---------------------------------------------------------------------------
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+const strings = JSON.parse(readFileSync(path.join(here, "../languages/en.json"), "utf8"));
+
+function localize(key) {
+  return strings[key] ?? key;
+}
+
+function format(key, data = {}) {
+  return localize(key).replace(/\{(\w+)\}/g, (_match, name) =>
+    Object.prototype.hasOwnProperty.call(data, name) ? String(data[name]) : `{${name}}`
+  );
+}
+
+/**
+ * Builds a minimal `game` stub sufficient for `runLoginNotification` to run
+ * to completion and post a chat summary: GM user, release version, real
+ * i18n (see above), and `settings.get`/`set` stubs covering every setting
+ * key `runLoginNotification`/`postChatSummary` reads. Defaults to
+ * `everyLogin` frequency so tests don't have to reason about the hash gate
+ * (that gate is already fully covered at the pure-function level by the
+ * `shouldNotifyForFrequency` tests above) — each render test cares about
+ * *what* gets posted, not *whether* the frequency gate lets it through.
+ */
+function buildGameStub({
+  isGM = true,
+  releaseVersion = "13.351",
+  releaseGeneration = "13",
+  pinnedModuleIds = [],
+  frequency = NOTIFICATION_FREQUENCIES.EVERY_LOGIN,
+} = {}) {
+  return {
+    user: { isGM },
+    release: { version: releaseVersion, generation: releaseGeneration, build: 351 },
+    i18n: { localize, format },
+    settings: {
+      get(_moduleId, key) {
+        if (key === FREQUENCY_SETTING_KEY) return frequency;
+        if (key === PINNED_MODULES_SETTING_KEY) return pinnedModuleIds;
+        return null; // last-notified-hash / last-notified-at: harmless default
+      },
+      async set() {
+        // No-op: this file only asserts on what gets posted, not on
+        // settings persistence (already covered elsewhere in this file by
+        // the shouldNotifyForFrequency/hashResults tests).
+      },
+    },
+  };
+}
+
+/**
+ * Runs `runLoginNotification` end-to-end against a hand-built
+ * `classification` (shaped like `compatibility-classifier.js`'s real
+ * output: `{ packages, comparisonTarget }`), with `ChatMessage` and `ui`
+ * stubbed so the posted chat content and any toast can be inspected
+ * afterward. Globals are installed and torn down per call so tests don't
+ * leak state into each other.
+ */
+async function runNotificationScenario(classification, gameOverrides = {}) {
+  const createdMessages = [];
+  const toastMessages = [];
+
+  globalThis.ChatMessage = {
+    getWhisperRecipients: () => [{ id: "gm-1" }],
+    create: async (data) => {
+      createdMessages.push(data);
+      return data;
+    },
+  };
+  globalThis.ui = {
+    notifications: {
+      warn: (message) => toastMessages.push(message),
+    },
+  };
+
+  try {
+    await runLoginNotification({ game: buildGameStub(gameOverrides), classification });
+  } finally {
+    delete globalThis.ChatMessage;
+    delete globalThis.ui;
+  }
+
+  return {
+    content: createdMessages[0]?.content ?? null,
+    createdMessages,
+    toastMessages,
+  };
+}
+
+// --- Verifying these tests fail for the right reason against pre-#51 -------
+//
+// Acceptance criteria explicitly asks this be checked, not assumed. Checked
+// via `git show c16a355^:scripts/login-notification.js` (c16a355 is #51's
+// merge commit) rather than by assumption: pre-#51 `postChatSummary` built
+// its `content` from a single `<p>` formatted from
+// `LoginNotification.Summary` (no `<ul>` at all), included a
+// `<p class="the-plugin-plugin-volunteer-reminder">` paragraph
+// unconditionally, and had no version-context line and no pinned-module
+// section whatsoever. Every render test below asserts the presence of
+// `<ul class="the-plugin-plugin-status-list">`, a version-context line, or a
+// pinned section (all absent pre-#51), or the absence of the volunteer
+// reminder (present pre-#51) — so each would fail against the pre-#51 shape
+// for exactly the reason this issue asks for, not some incidental one.
+
+// --- Render: per-status counts are itemised ---------------------------------
+
+test("chat summary: per-status counts render as a <ul>/<li> structured list, not a single prose sentence (Scenario: Per-status counts are itemised)", async () => {
+  const packages = [
+    pkg({ id: "clean" }),
+    pkg({ id: "update-only", updateAvailable: true }),
+    pkg({ id: "soft-lag", severity: "soft" }),
+    pkg({ id: "hard-problem", severity: "hard" }),
+    pkg({ id: "unmaintained", possiblyUnmaintained: true }),
+    pkg({ id: "failed", status: "error" }),
+  ];
+
+  const { content } = await runNotificationScenario({ packages, comparisonTarget: null });
+
+  assert.ok(content.includes('<ul class="the-plugin-plugin-status-list">'));
+
+  const summary = summarizeCompatibilityResults(packages);
+  const entries = buildStatusCountEntries(summary);
+  assert.equal(entries.length, 5, "exactly the five shared status labels");
+
+  for (const entry of entries) {
+    const expectedItem = format("THE-PLUGIN-PLUGIN.LoginNotification.StatusCountItem", {
+      label: localize(entry.i18nKey),
+      count: entry.count,
+    });
+    assert.ok(
+      content.includes(`<li>${expectedItem}</li>`),
+      `expected content to include <li>${expectedItem}</li>`
+    );
+  }
+
+  // Nothing pinned in this scenario, so every <li> belongs to the status
+  // list — confirms the list is structured markup, not prose text folded
+  // into a single sentence.
+  assert.equal((content.match(/<li>/g) ?? []).length, 5);
+});
+
+// --- Render: version context, all four target cases -------------------------
+// Governing: SPEC-0001 REQ "Login Notification" — "Version context with an
+// authoritative target" / "Version context with no target beyond the
+// running version" scenarios, plus the inferred case which sits between
+// them. An inference must never be presented as confirmed fact.
+
+test("chat summary: version context — authoritative + newer generation reads as confirmed, not inferred", async () => {
+  const comparisonTarget = {
+    source: "authoritative",
+    value: "14",
+    rawVersion: "14.366",
+    isNewer: true,
+    hasPeerSignal: false,
+  };
+  const { content } = await runNotificationScenario(
+    { packages: [pkg({ id: "a" })], comparisonTarget },
+    { releaseVersion: "13.351" }
+  );
+
+  const expected = format("THE-PLUGIN-PLUGIN.LoginNotification.VersionContextConfirmedNewer", {
+    runningVersion: "13.351",
+    targetVersion: "14.366",
+  });
+  assert.ok(content.includes(expected));
+  assert.match(expected.toLowerCase(), /confirms?/);
+  assert.ok(!content.toLowerCase().includes("not confirmed"));
+});
+
+test("chat summary: version context — authoritative + already current reads as confirmed, distinct wording from 'newer'", async () => {
+  const comparisonTarget = {
+    source: "authoritative",
+    value: "13",
+    rawVersion: "13.351",
+    isNewer: false,
+    hasPeerSignal: false,
+  };
+  const { content } = await runNotificationScenario(
+    { packages: [pkg({ id: "a" })], comparisonTarget },
+    { releaseVersion: "13.351" }
+  );
+
+  const expectedCurrent = format("THE-PLUGIN-PLUGIN.LoginNotification.VersionContextConfirmedCurrent", {
+    runningVersion: "13.351",
+    targetVersion: "13.351",
+  });
+  const confirmedNewerWording = format("THE-PLUGIN-PLUGIN.LoginNotification.VersionContextConfirmedNewer", {
+    runningVersion: "13.351",
+    targetVersion: "13.351",
+  });
+  assert.ok(content.includes(expectedCurrent));
+  assert.ok(!content.includes(confirmedNewerWording));
+  assert.match(expectedCurrent.toLowerCase(), /confirms?/);
+});
+
+test("chat summary: version context — inferred with peer signal reads as unconfirmed, never as fact (never the same wording as 'confirmed')", async () => {
+  const comparisonTarget = {
+    source: "inferred",
+    value: "14",
+    rawVersion: "14",
+    isNewer: true,
+    hasPeerSignal: true,
+  };
+  const { content } = await runNotificationScenario(
+    { packages: [pkg({ id: "a" })], comparisonTarget },
+    { releaseVersion: "13.351" }
+  );
+
+  const expected = format("THE-PLUGIN-PLUGIN.LoginNotification.VersionContextInferred", {
+    runningVersion: "13.351",
+    targetVersion: "14",
+  });
+  assert.ok(content.includes(expected));
+  // The distinguishing language: an inference reads as unconfirmed, unlike
+  // either "confirmed" case above.
+  assert.match(expected.toLowerCase(), /couldn't confirm|not confirmed/);
+  const confirmedNewerWording = format("THE-PLUGIN-PLUGIN.LoginNotification.VersionContextConfirmedNewer", {
+    runningVersion: "13.351",
+    targetVersion: "14",
+  });
+  assert.ok(!content.includes(confirmedNewerWording));
+});
+
+test("chat summary: version context — no target beyond the running version says so rather than omitting the line", async () => {
+  const { content } = await runNotificationScenario(
+    { packages: [pkg({ id: "a" })], comparisonTarget: null },
+    { releaseVersion: "13.351" }
+  );
+
+  const expected = format("THE-PLUGIN-PLUGIN.LoginNotification.VersionContextNoEvidence", {
+    runningVersion: "13.351",
+  });
+  assert.ok(content.includes(expected));
+  assert.ok(content.includes('<p class="the-plugin-plugin-version-context">'));
+});
+
+// --- Render: pinned callout --------------------------------------------------
+// Governing: SPEC-0001 REQ "Login Notification" — "Pinned module needing
+// attention is named" / "Pinned module that is clean" scenarios.
+
+test("chat summary: a pinned module that is not clean is named, with its status (Scenario: Pinned module needing attention is named)", async () => {
+  const packages = [pkg({ id: "critical-mod", title: "Critical Mod", severity: "hard" })];
+  const { content } = await runNotificationScenario(
+    { packages, comparisonTarget: null },
+    { pinnedModuleIds: ["critical-mod"] }
+  );
+
+  assert.ok(content.includes('<p class="the-plugin-plugin-pinned-heading">'));
+  assert.ok(content.includes('<ul class="the-plugin-plugin-pinned-list">'));
+  const expectedItem = format("THE-PLUGIN-PLUGIN.LoginNotification.PinnedItem", {
+    title: "Critical Mod",
+    status: localize("THE-PLUGIN-PLUGIN.Status.NotYetVerified"),
+  });
+  assert.ok(content.includes(`<li>${expectedItem}</li>`));
+});
+
+test("chat summary: every pinned module clean -> the pinned section is entirely absent, not rendered empty (Scenario: Pinned module that is clean)", async () => {
+  const packages = [
+    pkg({ id: "clean-mod", severity: null, updateAvailable: false, possiblyUnmaintained: false }),
+  ];
+  const { content } = await runNotificationScenario(
+    { packages, comparisonTarget: null },
+    { pinnedModuleIds: ["clean-mod"] }
+  );
+
+  assert.ok(!content.includes("the-plugin-plugin-pinned-heading"));
+  assert.ok(!content.includes("the-plugin-plugin-pinned-list"));
+});
+
+test("chat summary: nothing pinned at all -> the pinned section is entirely absent", async () => {
+  const packages = [pkg({ id: "hard-problem", severity: "hard" })];
+  const { content } = await runNotificationScenario(
+    { packages, comparisonTarget: null },
+    { pinnedModuleIds: [] }
+  );
+
+  assert.ok(!content.includes("the-plugin-plugin-pinned-heading"));
+  assert.ok(!content.includes("the-plugin-plugin-pinned-list"));
+});
+
+// --- Regression: naming a pinned module does not escalate --------------------
+// This is the ADR-0002 boundary and, per the issue, the single most valuable
+// test in this story: a soft-severity pinned module is named in the chat
+// content, but neither `summarizeCompatibilityResults`' counts nor
+// `shouldShowToast`'s decision move because of the pin.
+// Governing: ADR-0002, SPEC-0001 REQ "Login Notification" — "Soft-severity
+// pinned module is named but not escalated" scenario.
+
+test("chat summary: a soft-severity pinned module is named, but naming it changes neither the rendered counts, the summary counts, nor toast gating (ADR-0002 boundary)", async () => {
+  const packages = [pkg({ id: "soft-mod", title: "Soft Mod", severity: "soft" })];
+
+  const pinned = await runNotificationScenario(
+    { packages, comparisonTarget: null },
+    { pinnedModuleIds: ["soft-mod"] }
+  );
+  const unpinned = await runNotificationScenario(
+    { packages, comparisonTarget: null },
+    { pinnedModuleIds: [] }
+  );
+
+  // Named when pinned...
+  const expectedItem = format("THE-PLUGIN-PLUGIN.LoginNotification.PinnedItem", {
+    title: "Soft Mod",
+    status: localize("THE-PLUGIN-PLUGIN.Status.NotYetVerified"),
+  });
+  assert.ok(pinned.content.includes(`<li>${expectedItem}</li>`));
+  // ...and the whole pinned section is absent when it isn't.
+  assert.ok(!unpinned.content.includes("the-plugin-plugin-pinned-heading"));
+
+  // The rendered per-status <ul> is byte-identical whether or not the
+  // module is pinned — naming a module in the pinned callout never touches
+  // the per-status counts.
+  const statusListOf = (content) =>
+    content.match(/<ul class="the-plugin-plugin-status-list">.*?<\/ul>/s)[0];
+  assert.equal(statusListOf(pinned.content), statusListOf(unpinned.content));
+
+  // `summarizeCompatibilityResults` takes only `packages` — it has no
+  // pinning-awareness in its signature at all, so calling it against the
+  // identical `packages` array used in both scenarios above must produce
+  // identical counts. Asserted directly (not just inferred from the render
+  // above) per the issue's explicit ask.
+  assert.deepEqual(
+    summarizeCompatibilityResults(packages),
+    summarizeCompatibilityResults(packages)
+  );
+
+  // No toast in either scenario — soft severity never escalates, pinned or
+  // not (ADR-0002).
+  assert.equal(shouldShowToast(["soft-mod"], packages), false);
+  assert.deepEqual(pinned.toastMessages, []);
+  assert.deepEqual(unpinned.toastMessages, []);
+});
+
+// --- Regression: no volunteer reminder in the notification -------------------
+// Governing: SPEC-0001 REQ "Login Notification" ("NOT required to repeat the
+// volunteer reminder ... The reminder belongs where a GM acts on the
+// information"). Scoped removal: gone from the notification, still present
+// for the checker window (test/checker-table-template.test.js already
+// asserts `CheckerTable.KindnessReminder` renders in
+// templates/checker-table.hbs — not duplicated here, only cross-checked
+// that its underlying string still exists).
+
+test("chat summary: no volunteer/kindness reminder in the notification content (removed by #51 — scoped, not global)", async () => {
+  const packages = [pkg({ id: "a" })];
+  const { content } = await runNotificationScenario({ packages, comparisonTarget: null });
+
+  assert.ok(!content.includes("the-plugin-plugin-volunteer-reminder"));
+  assert.ok(!content.toLowerCase().includes("volunteer"));
+
+  // The old keys are gone entirely, not just unused.
+  assert.equal(strings["THE-PLUGIN-PLUGIN.LoginNotification.VolunteerReminder"], undefined);
+  assert.equal(strings["THE-PLUGIN-PLUGIN.LoginNotification.Summary"], undefined);
+
+  // The checker window's own (different) reminder key is untouched by this
+  // removal — see test/checker-table-template.test.js for the window's own
+  // render assertion; this only confirms the removal was scoped to the
+  // notification's key, not the window's.
+  assert.ok(
+    strings["THE-PLUGIN-PLUGIN.CheckerTable.KindnessReminder"] &&
+      strings["THE-PLUGIN-PLUGIN.CheckerTable.KindnessReminder"].length > 0
+  );
+});
+
+// --- Regression: kindness ----------------------------------------------------
+// test/language-strings.test.js already scans every value in languages/en.json
+// (including the new LoginNotification.* keys added by #51, since it
+// iterates Object.entries(strings) over the whole file) for "dead"/
+// "broken"/"abandoned" — that generic coverage is sufficient for the static
+// strings themselves, so it isn't duplicated key-by-key here. What that
+// scan can't see is *rendered, interpolated* content (e.g. a package title
+// folded into a pinned-item line), so this test scans actual `content`
+// output across a few representative scenarios instead.
+
+test("chat summary: rendered content never uses 'dead'/'broken'/'abandoned' wording, across representative scenarios (CLAUDE.md project rule 1)", async () => {
+  const scenarios = [
+    {
+      classification: {
+        packages: [pkg({ id: "hard", title: "Hard Mod", severity: "hard" })],
+        comparisonTarget: {
+          source: "authoritative",
+          value: "14",
+          rawVersion: "14.366",
+          isNewer: true,
+          hasPeerSignal: false,
+        },
+      },
+      gameOverrides: { pinnedModuleIds: ["hard"] },
+    },
+    {
+      classification: {
+        packages: [pkg({ id: "unmaintained", title: "Unmaintained Mod", possiblyUnmaintained: true })],
+        comparisonTarget: null,
+      },
+      gameOverrides: { pinnedModuleIds: ["unmaintained"] },
+    },
+    {
+      classification: {
+        packages: [pkg({ id: "err", status: "error" })],
+        comparisonTarget: {
+          source: "inferred",
+          value: "14",
+          rawVersion: "14",
+          isNewer: true,
+          hasPeerSignal: true,
+        },
+      },
+      gameOverrides: {},
+    },
+  ];
+
+  for (const { classification, gameOverrides } of scenarios) {
+    const { content } = await runNotificationScenario(classification, gameOverrides);
+    const lower = content.toLowerCase();
+    for (const word of ["dead", "broken", "abandoned"]) {
+      assert.ok(!lower.includes(word), `content contains forbidden word "${word}":\n${content}`);
+    }
+  }
 });
