@@ -27,6 +27,8 @@ import {
   runWithConcurrency,
   isNewerVersion,
   checkActivePackages,
+  consumeGithubApiBudget,
+  DEFAULT_GITHUB_API_BUDGET,
 } from "./manifest-fetcher.js";
 
 // ---------------------------------------------------------------------------
@@ -412,6 +414,11 @@ export function isDormant(pushedAt, now = new Date()) {
  * @param {AbortSignal} [options.signal]
  * @param {typeof checkGithubArchived} [options.githubCheck] - injectable for tests
  * @param {typeof Date} [options.now] - injectable "current time" for tests
+ * @param {{remaining: number}} [options.githubApiBudget] - shared rate-limit
+ *   budget (ADR-0003 Amendment 2, SPEC-0002 REQ "Fallback Scope and
+ *   Limits"), also spent by release-tag resolution in manifest-fetcher.js.
+ *   Opt-in: when omitted, every candidate is checked unconditionally,
+ *   exactly as before this feature.
  * @returns {Promise<Array>} same packages, each gaining `githubArchived`
  *   (boolean|null), `repoDormant` (boolean|null), and `possiblyUnmaintained`
  *   (boolean).
@@ -426,6 +433,7 @@ export async function applyPossiblyUnmaintainedHeuristic(
     signal,
     githubCheck = checkGithubArchived,
     now = new Date(),
+    githubApiBudget,
   } = options;
 
   // Only packages already failing the verified check are eligible at all —
@@ -440,6 +448,14 @@ export async function applyPossiblyUnmaintainedHeuristic(
         parseGithubRepo(pkg.links?.url) ?? parseGithubRepo(pkg.links?.bugs);
       if (!repo) {
         githubResultsById.set(pkg.id, { archived: null, pushedAt: null, reason: "not-a-github-repo" });
+        return;
+      }
+      // Governing: ADR-0003 Amendment 2, SPEC-0002 REQ "Fallback Scope and
+      // Limits" — this consumer shares the budget with release-tag
+      // resolution; once exhausted, degrade to the existing "unknown"
+      // shape rather than making the call.
+      if (githubApiBudget && !consumeGithubApiBudget(githubApiBudget)) {
+        githubResultsById.set(pkg.id, { archived: null, pushedAt: null, reason: "github-api-budget-exhausted" });
         return;
       }
       githubResultsById.set(pkg.id, await githubCheck(repo, { fetchImpl, signal }));
@@ -524,11 +540,23 @@ export async function classifyActiveCompatibility(options = {}) {
   // is not a network request; Foundry's own server already populated it.
   const coreUpdate =
     options.coreUpdate !== undefined ? options.coreUpdate : (gameInstance?.data?.coreUpdate ?? null);
+  // Governing: ADR-0003 Amendment 2, SPEC-0002 REQ "Fallback Scope and
+  // Limits" — this is the one place a *default* shared budget object gets
+  // created (the real production call path); lower-level functions
+  // (`fetchPackageManifest`, `applyPossiblyUnmaintainedHeuristic`) stay
+  // opt-in and never default one themselves, so their existing unit tests
+  // are unaffected. The same object is threaded into both calls below so
+  // release-tag resolution (during the fetch) and the archived-repo check
+  // (afterward) draw from one shared counter.
+  const githubApiBudget =
+    options.githubApiBudget ?? { remaining: DEFAULT_GITHUB_API_BUDGET };
   const results =
-    options.results ?? (await checkActivePackages({ game: gameInstance, ...options }));
+    options.results ??
+    (await checkActivePackages({ game: gameInstance, ...options, githubApiBudget }));
 
   return classifyCompatibility(results, gameRelease, {
     ...options,
+    githubApiBudget,
     gameReleaseVersion,
     coreUpdate,
   });

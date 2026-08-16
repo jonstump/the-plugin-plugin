@@ -20,6 +20,8 @@ import {
   isNewerVersion,
   getActivePackagesFromGame,
   deriveFallbackUrl,
+  consumeGithubApiBudget,
+  DEFAULT_GITHUB_API_BUDGET,
 } from "../scripts/manifest-fetcher.js";
 
 function okResponse(body) {
@@ -448,7 +450,13 @@ test("fetchPackageManifest treats a fallback 404 as terminal (manifest not at re
   assert.equal(result.status, "error");
 });
 
-test("fetchPackageManifest never calls the GitHub API as part of the fallback", async () => {
+test("fetchPackageManifest never calls the GitHub API as part of the fallback when no rate-limit budget is provided (opt-in feature, ADR-0003 Amendment 2)", async () => {
+  // Governing: ADR-0003 Amendment 2, SPEC-0002 REQ "Release Tag Resolution"
+  // — release-tag resolution against api.github.com is opt-in via
+  // `options.githubApiBudget`. This call doesn't pass that option, so the
+  // original claim ("fallback never calls the GitHub API") still holds
+  // exactly as before this feature; see the "release tag resolution" tests
+  // below for the budget-supplied behavior.
   const pkg = {
     id: "no-api-mod",
     title: "No API Mod",
@@ -470,6 +478,235 @@ test("fetchPackageManifest never calls the GitHub API as part of the fallback", 
     requestedUrls.every((url) => !url.includes("api.github.com")),
     "fallback must not spend GitHub API rate-limit budget"
   );
+});
+
+// --- Release Tag Resolution (ADR-0003 Amendment 2, SPEC-0002 REQ "Release
+// Tag Resolution", issue #58/#59) -------------------------------------------
+//
+// A third resolution path, tried before the raw/HEAD fallback, when a shared
+// `githubApiBudget` is supplied: resolve the repo's actual latest release
+// tag via `GET /repos/{owner}/{repo}/releases/latest`, then fetch the
+// manifest AT that tag. Unlike the raw/HEAD fallback, this data is genuinely
+// trustworthy — both `version` and `compatibility.verified` are used exactly
+// as a `declared` result would be, under a distinct `"release"` provenance.
+
+test("fetchPackageManifest: a resolved release tag yields a fully-trustworthy 'release'-provenance result (real smarttarget-style skew)", async () => {
+  // Governing: ADR-0003 Amendment 2 — mirrors the real-world case (issue
+  // #58) where the fallback-sourced `version` was a stale placeholder but
+  // the repo's actual latest GitHub release was genuinely much newer.
+  const pkg = {
+    id: "smarttarget",
+    title: "Smart Target",
+    manifestUrl:
+      "https://github.com/theripper93/Smart-Target/releases/latest/download/module.json",
+    installedVersion: "0.9.8",
+  };
+  const requestedUrls = [];
+  const fetchImpl = async (url) => {
+    requestedUrls.push(url);
+    if (url === "https://api.github.com/repos/theripper93/Smart-Target/releases/latest") {
+      return okResponse({ tag_name: "4.0.0" });
+    }
+    if (url === "https://raw.githubusercontent.com/theripper93/Smart-Target/4.0.0/module.json") {
+      return okResponse({ version: "4.0.0", compatibility: { verified: "14" } });
+    }
+    // Declared URL, and the raw/HEAD fallback (must never be reached).
+    throw new TypeError("Failed to fetch");
+  };
+
+  const result = await fetchPackageManifest(pkg, {
+    fetchImpl,
+    githubApiBudget: { remaining: 5 },
+  });
+
+  assert.equal(result.status, "ok");
+  assert.equal(result.provenance, "release");
+  // Unlike a "fallback" result, both version and updateAvailable are real.
+  assert.equal(result.latestVersion, "4.0.0");
+  assert.equal(result.updateAvailable, true);
+  assert.equal(result.verified, "14");
+  assert.ok(
+    !requestedUrls.includes(
+      "https://raw.githubusercontent.com/theripper93/Smart-Target/HEAD/module.json"
+    ),
+    "raw/HEAD fallback must not be attempted once tag resolution succeeds"
+  );
+});
+
+test("fetchPackageManifest: no releases published (404) falls through to raw/HEAD fallback unchanged", async () => {
+  // This is the the-plugin-plugin-in-dev case: a repo with no tagged
+  // releases yet. Tag resolution must fail silently, with the existing
+  // raw/HEAD fallback (and its 'version unknown' Fallback Field Trust
+  // behavior) picking up exactly as it does today.
+  const pkg = {
+    id: "in-dev-mod",
+    title: "In Dev Mod",
+    manifestUrl: "https://github.com/owner/in-dev-mod/releases/latest/download/module.json",
+    installedVersion: "1.0.0",
+  };
+  const requestedUrls = [];
+  const fetchImpl = async (url) => {
+    requestedUrls.push(url);
+    if (url.includes("api.github.com/repos/owner/in-dev-mod/releases/latest")) {
+      return { ok: false, status: 404, json: async () => ({}) };
+    }
+    if (url.includes("raw.githubusercontent.com")) {
+      return okResponse({ version: "0.1.0", compatibility: { verified: "13" } });
+    }
+    throw new TypeError("Failed to fetch");
+  };
+
+  const result = await fetchPackageManifest(pkg, {
+    fetchImpl,
+    githubApiBudget: { remaining: 5 },
+  });
+
+  assert.equal(result.status, "ok");
+  assert.equal(result.provenance, "fallback");
+  assert.equal(result.latestVersion, null);
+  assert.equal(result.updateAvailable, null);
+  assert.equal(result.verified, "13");
+  assert.deepEqual(requestedUrls, [
+    "https://github.com/owner/in-dev-mod/releases/latest/download/module.json",
+    "https://api.github.com/repos/owner/in-dev-mod/releases/latest",
+    "https://raw.githubusercontent.com/owner/in-dev-mod/HEAD/module.json",
+  ]);
+});
+
+test("fetchPackageManifest: tag resolves but the tag-resolved manifest fetch itself 404s -> falls through to raw/HEAD, no separate error", async () => {
+  const pkg = {
+    id: "tag-manifest-missing",
+    title: "Tag Manifest Missing",
+    manifestUrl:
+      "https://github.com/owner/tag-manifest-missing/releases/latest/download/module.json",
+    installedVersion: "1.0.0",
+  };
+  const fetchImpl = async (url) => {
+    if (url.includes("api.github.com") && url.includes("/releases/latest")) {
+      return okResponse({ tag_name: "v2.0.0" });
+    }
+    if (url === "https://raw.githubusercontent.com/owner/tag-manifest-missing/v2.0.0/module.json") {
+      return { ok: false, status: 404, json: async () => ({}) };
+    }
+    if (url === "https://raw.githubusercontent.com/owner/tag-manifest-missing/HEAD/module.json") {
+      return okResponse({ version: "1.5.0", compatibility: { verified: "13" } });
+    }
+    throw new TypeError("Failed to fetch");
+  };
+
+  const result = await fetchPackageManifest(pkg, {
+    fetchImpl,
+    githubApiBudget: { remaining: 5 },
+  });
+
+  assert.equal(result.status, "ok");
+  assert.equal(result.provenance, "fallback");
+  assert.equal(result.latestVersion, null);
+  assert.equal(result.error, null);
+});
+
+test("fetchPackageManifest: the GitHub API call itself rejects (network failure) -> falls through to raw/HEAD fallback", async () => {
+  const pkg = {
+    id: "api-network-fail",
+    title: "API Network Fail",
+    manifestUrl:
+      "https://github.com/owner/api-network-fail/releases/latest/download/module.json",
+    installedVersion: "1.0.0",
+  };
+  const fetchImpl = async (url) => {
+    if (url.includes("api.github.com")) {
+      throw new TypeError("Failed to fetch");
+    }
+    if (url.includes("raw.githubusercontent.com")) {
+      return okResponse({ version: "1.2.0", compatibility: { verified: "13" } });
+    }
+    throw new TypeError("Failed to fetch");
+  };
+
+  const result = await fetchPackageManifest(pkg, {
+    fetchImpl,
+    githubApiBudget: { remaining: 5 },
+  });
+
+  assert.equal(result.status, "ok");
+  assert.equal(result.provenance, "fallback");
+});
+
+test("fetchPackageManifest: no githubApiBudget option at all -> tag resolution never attempted, provenance is fallback as before this feature", async () => {
+  const pkg = {
+    id: "no-budget-mod",
+    title: "No Budget Mod",
+    manifestUrl: "https://github.com/owner/no-budget-mod/releases/latest/download/module.json",
+    installedVersion: "1.0.0",
+  };
+  const requestedUrls = [];
+  const fetchImpl = async (url) => {
+    requestedUrls.push(url);
+    if (url.includes("raw.githubusercontent.com")) {
+      return okResponse({ version: "9.9.9", compatibility: { verified: "14" } });
+    }
+    throw new TypeError("Failed to fetch");
+  };
+
+  // No `githubApiBudget` in options at all — the release-tag-resolution
+  // block should never execute.
+  const result = await fetchPackageManifest(pkg, { fetchImpl });
+
+  assert.ok(requestedUrls.every((url) => !url.includes("api.github.com")));
+  assert.equal(result.provenance, "fallback");
+  assert.equal(result.latestVersion, null);
+});
+
+test("fetchPackageManifest: budget already exhausted ({remaining: 0}) -> tag resolution skipped, no api.github.com call made at all", async () => {
+  const pkg = {
+    id: "exhausted-budget-mod",
+    title: "Exhausted Budget Mod",
+    manifestUrl:
+      "https://github.com/owner/exhausted-budget-mod/releases/latest/download/module.json",
+    installedVersion: "1.0.0",
+  };
+  const requestedUrls = [];
+  const fetchImpl = async (url) => {
+    requestedUrls.push(url);
+    if (url.includes("raw.githubusercontent.com")) {
+      return okResponse({ version: "9.9.9", compatibility: { verified: "14" } });
+    }
+    throw new TypeError("Failed to fetch");
+  };
+  const budget = { remaining: 0 };
+
+  const result = await fetchPackageManifest(pkg, { fetchImpl, githubApiBudget: budget });
+
+  assert.ok(requestedUrls.every((url) => !url.includes("api.github.com")));
+  assert.equal(result.provenance, "fallback");
+  assert.equal(budget.remaining, 0, "an already-exhausted budget must not go negative");
+});
+
+// --- consumeGithubApiBudget / DEFAULT_GITHUB_API_BUDGET ---------------------
+
+test("consumeGithubApiBudget decrements remaining and returns true while capacity is left", () => {
+  const budget = { remaining: 2 };
+
+  assert.equal(consumeGithubApiBudget(budget), true);
+  assert.equal(budget.remaining, 1);
+  assert.equal(consumeGithubApiBudget(budget), true);
+  assert.equal(budget.remaining, 0);
+});
+
+test("consumeGithubApiBudget returns false without decrementing further once at zero", () => {
+  const budget = { remaining: 0 };
+
+  assert.equal(consumeGithubApiBudget(budget), false);
+  assert.equal(budget.remaining, 0);
+
+  budget.remaining = -1; // pathological input; must never go more negative
+  assert.equal(consumeGithubApiBudget(budget), false);
+  assert.equal(budget.remaining, -1);
+});
+
+test("DEFAULT_GITHUB_API_BUDGET is a sane positive default", () => {
+  assert.equal(typeof DEFAULT_GITHUB_API_BUDGET, "number");
+  assert.ok(DEFAULT_GITHUB_API_BUDGET > 0);
 });
 
 // --- checkPackages: concurrency + isolation + caching -------------------
@@ -645,6 +882,45 @@ test("checkPackages holds the concurrency cap when every package falls back", as
     results.every((r) => r.status === "ok" && r.provenance === "fallback")
   );
   assert.ok(maxActive <= 3, `maxActive was ${maxActive}, expected <= 3`);
+});
+
+test("checkPackages forwards options.githubApiBudget through to fetchPackageManifest (release tag resolution works via checkPackages, not just directly)", async () => {
+  // Governing: ADR-0003 Amendment 2 — checkPackages destructures a
+  // hand-picked subset of `options` for the call into fetchPackageManifest
+  // rather than spreading the whole object, so githubApiBudget must be
+  // explicitly threaded through. This guards against that wiring regressing
+  // silently.
+  const packages = [
+    {
+      id: "budget-through-checkpackages",
+      title: "Budget Through checkPackages",
+      manifestUrl:
+        "https://github.com/owner/budget-through-checkpackages/releases/latest/download/module.json",
+      installedVersion: "1.0.0",
+    },
+  ];
+  const requestedUrls = [];
+  const fetchImpl = async (url) => {
+    requestedUrls.push(url);
+    if (url.includes("api.github.com") && url.includes("/releases/latest")) {
+      return okResponse({ tag_name: "3.0.0" });
+    }
+    if (url === "https://raw.githubusercontent.com/owner/budget-through-checkpackages/3.0.0/module.json") {
+      return okResponse({ version: "3.0.0", compatibility: { verified: "14" } });
+    }
+    throw new TypeError("Failed to fetch");
+  };
+
+  const results = await checkPackages(packages, {
+    fetchImpl,
+    cache: new Map(),
+    githubApiBudget: { remaining: 5 },
+  });
+
+  assert.equal(results.length, 1);
+  assert.equal(results[0].provenance, "release");
+  assert.equal(results[0].latestVersion, "3.0.0");
+  assert.ok(requestedUrls.some((url) => url.includes("api.github.com")));
 });
 
 test("cancellation stops a fallback attempt mid-flight without throwing or reporting a partial result", async () => {
