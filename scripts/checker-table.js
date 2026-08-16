@@ -31,8 +31,8 @@ const MODULE_ID = "the-plugin-plugin";
 // storing pinned module ids as a plain array. `game.settings` has no native
 // Set type; togglePinned/isPinned in checker-table-logic.js both accept and
 // return plain arrays for exactly this reason. Registered additively in
-// scripts/the-plugin-plugin.js's existing `init` hook, alongside issue #7's
-// PREVIOUS_VERSIONS_SETTING_KEY.
+// scripts/the-plugin-plugin.js's existing `init` hook, alongside this
+// module's other world-scoped settings.
 export const PINNED_MODULES_SETTING_KEY = "pinnedCriticalModules";
 
 /** Reads the pinned-module-ids world setting; `[]` if unset/unavailable (e.g. setting not yet registered, or no world loaded). */

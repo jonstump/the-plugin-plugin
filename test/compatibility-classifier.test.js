@@ -16,6 +16,7 @@ import {
   classifyPackages,
   parseGithubRepo,
   checkGithubArchived,
+  isDormant,
   applyPossiblyUnmaintainedHeuristic,
   classifyCompatibility,
 } from "../scripts/compatibility-classifier.js";
@@ -402,7 +403,20 @@ test("checkGithubArchived returns archived: true/false on success", async () => 
   assert.equal(result.archived, true);
 });
 
-test("checkGithubArchived treats API failure as unknown (archived: null), not evidence either way", async () => {
+test("checkGithubArchived extracts pushed_at from the same response, no second request", async () => {
+  let callCount = 0;
+  const fetchImpl = async () => {
+    callCount += 1;
+    return { ok: true, json: async () => ({ archived: false, pushed_at: "2024-01-01T00:00:00Z" }) };
+  };
+  const result = await checkGithubArchived({ owner: "foo", repo: "bar" }, { fetchImpl });
+
+  assert.equal(result.archived, false);
+  assert.equal(result.pushedAt, "2024-01-01T00:00:00Z");
+  assert.equal(callCount, 1);
+});
+
+test("checkGithubArchived treats API failure as unknown (archived: null, pushedAt: null), not evidence either way", async () => {
   const rateLimited = async () => ({ ok: false, status: 403 });
   const networkError = async () => {
     throw new Error("network down");
@@ -412,7 +426,25 @@ test("checkGithubArchived treats API failure as unknown (archived: null), not ev
   const b = await checkGithubArchived({ owner: "foo", repo: "bar" }, { fetchImpl: networkError });
 
   assert.equal(a.archived, null);
+  assert.equal(a.pushedAt, null);
   assert.equal(b.archived, null);
+  assert.equal(b.pushedAt, null);
+});
+
+// --- isDormant ---------------------------------------------------------
+
+test("isDormant: pushed_at at least 12 months before now -> true", () => {
+  assert.equal(isDormant("2024-01-01T00:00:00Z", new Date("2026-08-15T00:00:00Z")), true);
+});
+
+test("isDormant: pushed_at within the last 12 months -> false", () => {
+  assert.equal(isDormant("2026-05-01T00:00:00Z", new Date("2026-08-15T00:00:00Z")), false);
+});
+
+test("isDormant: missing or unparseable pushed_at -> null (unknown)", () => {
+  assert.equal(isDormant(null), null);
+  assert.equal(isDormant(undefined), null);
+  assert.equal(isDormant("not-a-date"), null);
 });
 
 // --- applyPossiblyUnmaintainedHeuristic ------------------------------------
@@ -438,54 +470,103 @@ function passingPkg(id) {
   };
 }
 
-test("possibly-unmaintained: both signals present (frozen version + archived) -> flagged", async () => {
-  const pkg = failingPkg("frozen-and-archived", {
-    latestVersion: "1.0.0",
+const NOW = new Date("2026-08-15T00:00:00Z");
+
+// Governing: SPEC-0001 REQ "Possibly Unmaintained Heuristic" Scenario:
+// Archived repository.
+test("possibly-unmaintained: archived repository -> flagged", async () => {
+  const pkg = failingPkg("archived-repo", {
     links: { url: "https://github.com/foo/bar", bugs: null, changelog: null },
   });
-  const githubCheck = async () => ({ archived: true, reason: null });
+  const githubCheck = async () => ({ archived: true, pushedAt: "2026-08-01T00:00:00Z", reason: null });
 
-  const [result] = await applyPossiblyUnmaintainedHeuristic([pkg], {
-    previousVersions: { "frozen-and-archived": "1.0.0" },
-    githubCheck,
-  });
+  const [result] = await applyPossiblyUnmaintainedHeuristic([pkg], { githubCheck, now: NOW });
 
-  assert.equal(result.versionFrozen, true);
   assert.equal(result.githubArchived, true);
+  assert.equal(result.repoDormant, false); // recently pushed, but archived alone is enough
   assert.equal(result.possiblyUnmaintained, true);
 });
 
-test("possibly-unmaintained: only one signal present -> not flagged", async () => {
-  const pkg = failingPkg("version-changed-not-archived", {
-    latestVersion: "1.1.0",
+// Governing: SPEC-0001 REQ "Possibly Unmaintained Heuristic" Scenario:
+// Dormant repository.
+test("possibly-unmaintained: dormant repository (pushed_at >= 12 months old) -> flagged", async () => {
+  const pkg = failingPkg("dormant-repo", {
     links: { url: "https://github.com/foo/bar", bugs: null, changelog: null },
   });
-  const githubCheck = async () => ({ archived: false, reason: null });
+  const githubCheck = async () => ({ archived: false, pushedAt: "2024-06-22T00:00:00Z", reason: null });
 
-  const [result] = await applyPossiblyUnmaintainedHeuristic([pkg], {
-    previousVersions: { "version-changed-not-archived": "1.0.0" }, // version changed since last check
-    githubCheck,
-  });
+  const [result] = await applyPossiblyUnmaintainedHeuristic([pkg], { githubCheck, now: NOW });
 
-  assert.equal(result.versionFrozen, false);
   assert.equal(result.githubArchived, false);
-  assert.equal(result.possiblyUnmaintained, false);
+  assert.equal(result.repoDormant, true);
+  assert.equal(result.possiblyUnmaintained, true);
 });
 
-test("possibly-unmaintained: GitHub API failure treated as unknown, never flags on its own", async () => {
-  const pkg = failingPkg("api-failure", {
-    latestVersion: "1.0.0",
+// Governing: SPEC-0001 REQ "Possibly Unmaintained Heuristic" Scenario:
+// Recently active repository.
+test("possibly-unmaintained: recently active, non-archived repository -> NOT flagged, however many times checked", async () => {
+  const pkg = failingPkg("recently-active", {
     links: { url: "https://github.com/foo/bar", bugs: null, changelog: null },
   });
-  const githubCheck = async () => ({ archived: null, reason: "rate-limited" });
+  const githubCheck = async () => ({ archived: false, pushedAt: "2026-07-01T00:00:00Z", reason: null });
 
-  const [result] = await applyPossiblyUnmaintainedHeuristic([pkg], {
-    previousVersions: {}, // no baseline -> versionFrozen unknown (null) too
+  const firstCheck = await applyPossiblyUnmaintainedHeuristic([pkg], { githubCheck, now: NOW });
+  const secondCheck = await applyPossiblyUnmaintainedHeuristic([pkg], { githubCheck, now: NOW });
+  const thirdCheck = await applyPossiblyUnmaintainedHeuristic([pkg], { githubCheck, now: NOW });
+
+  for (const [result] of [firstCheck, secondCheck, thirdCheck]) {
+    assert.equal(result.githubArchived, false);
+    assert.equal(result.repoDormant, false);
+    assert.equal(result.possiblyUnmaintained, false);
+  }
+});
+
+// Governing: SPEC-0001 REQ "Possibly Unmaintained Heuristic" Scenario:
+// Repeated checks in quick succession. This is the exact regression from
+// issue #22 / ADR-0004: multilevel-tokens (actively maintained, not
+// archived) was flagged "possibly unmaintained" purely because two checks
+// landed a few minutes apart and observed the same manifest version. Activity
+// age must not vary with elapsed real time between checks.
+test("REGRESSION issue #22: two checks seconds apart against a recently-active, non-archived, failing package both agree and neither flags 'possibly unmaintained'", async () => {
+  const pkg = failingPkg("multilevel-tokens", {
+    links: { url: "https://github.com/multilevel-tokens/multilevel-tokens", bugs: null, changelog: null },
+  });
+  // Same GitHub API response both times, as it would be in real life within
+  // a single sitting — pushed a month ago, never archived.
+  const githubCheck = async () => ({ archived: false, pushedAt: "2026-07-15T00:00:00Z", reason: null });
+
+  const checkOneTime = new Date("2026-08-15T10:00:00Z");
+  const checkTwoTime = new Date("2026-08-15T10:00:04Z"); // 4 seconds later
+
+  const [resultOne] = await applyPossiblyUnmaintainedHeuristic([pkg], {
     githubCheck,
+    now: checkOneTime,
+  });
+  const [resultTwo] = await applyPossiblyUnmaintainedHeuristic([pkg], {
+    githubCheck,
+    now: checkTwoTime,
   });
 
-  assert.equal(result.versionFrozen, null);
+  assert.equal(resultOne.possiblyUnmaintained, false);
+  assert.equal(resultTwo.possiblyUnmaintained, false);
+  assert.deepEqual(
+    { archived: resultOne.githubArchived, dormant: resultOne.repoDormant, flagged: resultOne.possiblyUnmaintained },
+    { archived: resultTwo.githubArchived, dormant: resultTwo.repoDormant, flagged: resultTwo.possiblyUnmaintained }
+  );
+});
+
+// Governing: SPEC-0001 REQ "Possibly Unmaintained Heuristic" Scenario:
+// GitHub API failure.
+test("possibly-unmaintained: GitHub API failure treated as unknown, never flags on its own", async () => {
+  const pkg = failingPkg("api-failure", {
+    links: { url: "https://github.com/foo/bar", bugs: null, changelog: null },
+  });
+  const githubCheck = async () => ({ archived: null, pushedAt: null, reason: "rate-limited" });
+
+  const [result] = await applyPossiblyUnmaintainedHeuristic([pkg], { githubCheck, now: NOW });
+
   assert.equal(result.githubArchived, null);
+  assert.equal(result.repoDormant, null);
   assert.equal(result.possiblyUnmaintained, false);
 });
 
@@ -501,21 +582,23 @@ test("possibly-unmaintained: GitHub API is only queried for packages already fai
   let calledWith = [];
   const githubCheck = async (repo) => {
     calledWith.push(repo.repo);
-    return { archived: false, reason: null };
+    return { archived: false, pushedAt: "2026-07-01T00:00:00Z", reason: null };
   };
 
-  await applyPossiblyUnmaintainedHeuristic([failing, passing], { githubCheck });
+  await applyPossiblyUnmaintainedHeuristic([failing, passing], { githubCheck, now: NOW });
 
   assert.deepEqual(calledWith, ["failing-repo"]);
 });
 
-test("possibly-unmaintained: no GitHub link and no version history -> not flagged (unknown, not evidence)", async () => {
+// Governing: SPEC-0001 REQ "Possibly Unmaintained Heuristic" Scenario:
+// Package not hosted on GitHub.
+test("possibly-unmaintained: no GitHub link -> not flagged (unknown, not evidence)", async () => {
   const pkg = failingPkg("no-signal", { links: { url: null, bugs: null, changelog: null } });
 
-  const [result] = await applyPossiblyUnmaintainedHeuristic([pkg], { previousVersions: {} });
+  const [result] = await applyPossiblyUnmaintainedHeuristic([pkg], { now: NOW });
 
-  assert.equal(result.versionFrozen, null);
   assert.equal(result.githubArchived, null);
+  assert.equal(result.repoDormant, null);
   assert.equal(result.possiblyUnmaintained, false);
 });
 
@@ -537,18 +620,18 @@ test("classifyCompatibility ties inferredLatest, severity, and possiblyUnmaintai
       links: { url: "https://github.com/foo/straggler", bugs: null, changelog: null },
     }),
   ];
-  const githubCheck = async () => ({ archived: true, reason: null });
+  const githubCheck = async () => ({ archived: true, pushedAt: "2026-07-01T00:00:00Z", reason: null });
 
   const { comparisonTarget, packages } = await classifyCompatibility(results, "13", {
-    previousVersions: { straggler: "1.0.0" },
     githubCheck,
+    now: NOW,
   });
 
   assert.equal(comparisonTarget.value, "14");
 
   const straggler = packages.find((p) => p.id === "straggler");
   assert.equal(straggler.severity, "hard"); // maximum (12) below game.release (13)
-  assert.equal(straggler.possiblyUnmaintained, true); // frozen version + archived
+  assert.equal(straggler.possiblyUnmaintained, true); // archived
 
   const leader = packages.find((p) => p.id === "leader");
   assert.equal(leader.severity, null);

@@ -16,11 +16,10 @@
  *    severity, never a synonym for "dead"/"broken"/"abandoned".
  *
  * As with manifest-fetcher.js, the core logic here is plain, pure, and
- * dependency-injectable (fetch implementation, previously-seen versions,
- * and the Foundry `game` global are all parameters) so it's unit-testable
- * with Node's built-in test runner outside a running Foundry world. Only
- * the functions in the "Foundry glue" section at the bottom read `game` /
- * `game.settings`.
+ * dependency-injectable (fetch implementation and the Foundry `game` global
+ * are both parameters) so it's unit-testable with Node's built-in test
+ * runner outside a running Foundry world. Only the functions in the
+ * "Foundry glue" section at the bottom read `game` / `game.settings`.
  */
 
 import {
@@ -29,8 +28,6 @@ import {
   isNewerVersion,
   checkActivePackages,
 } from "./manifest-fetcher.js";
-
-const MODULE_ID = "the-plugin-plugin";
 
 // ---------------------------------------------------------------------------
 // Requirement: Inferred Latest Version
@@ -323,19 +320,25 @@ export function parseGithubRepo(urlString) {
 }
 
 /**
- * Queries the unauthenticated GitHub API for a repo's `archived` field.
- * Never throws — any failure (network error, non-200, rate limit, abort)
- * resolves to `{ archived: null }`, which callers MUST treat as "unknown",
- * never as evidence toward or against "possibly unmaintained".
+ * Queries the unauthenticated GitHub API for a repo's `archived` status and
+ * activity age. Never throws — any failure (network error, non-200, rate
+ * limit, abort) resolves to `{ archived: null, pushedAt: null }`, which
+ * callers MUST treat as "unknown", never as evidence toward or against
+ * "possibly unmaintained".
  *
- * Governing: SPEC-0001 REQ "Possibly Unmaintained Heuristic" ("MUST treat a
- * GitHub API failure ... as unknown"), design.md decision ("GitHub archived
- * lookup is scoped to already-failing packages only" — enforced by the
- * caller, `applyPossiblyUnmaintainedHeuristic`, not by this function).
+ * Both signals are read from the same `GET /repos/{owner}/{repo}` response —
+ * per ADR-0004 and design.md's "single request" architecture note, this MUST
+ * NOT issue a second request to obtain activity age.
+ *
+ * Governing: ADR-0004, SPEC-0001 REQ "Possibly Unmaintained Heuristic" ("MUST
+ * treat a GitHub API failure ... as unknown", "both signals are read from a
+ * single ... request"), design.md decision ("GitHub archived lookup is
+ * scoped to already-failing packages only" — enforced by the caller,
+ * `applyPossiblyUnmaintainedHeuristic`, not by this function).
  */
 export async function checkGithubArchived(ownerRepo, options = {}) {
   const { fetchImpl = fetch, signal } = options;
-  if (!ownerRepo) return { archived: null, reason: "not-a-github-repo" };
+  if (!ownerRepo) return { archived: null, pushedAt: null, reason: "not-a-github-repo" };
 
   let response;
   try {
@@ -344,11 +347,11 @@ export async function checkGithubArchived(ownerRepo, options = {}) {
       { signal, headers: { Accept: "application/vnd.github+json" } }
     );
   } catch (err) {
-    return { archived: null, reason: err?.message ?? String(err) };
+    return { archived: null, pushedAt: null, reason: err?.message ?? String(err) };
   }
 
   if (!response.ok) {
-    return { archived: null, reason: `github-api-status-${response.status}` };
+    return { archived: null, pushedAt: null, reason: `github-api-status-${response.status}` };
   }
 
   let data;
@@ -357,18 +360,37 @@ export async function checkGithubArchived(ownerRepo, options = {}) {
   } catch (err) {
     return {
       archived: null,
+      pushedAt: null,
       reason: `github-api-response-not-json: ${err?.message ?? err}`,
     };
   }
 
-  return { archived: Boolean(data.archived), reason: null };
+  return {
+    archived: Boolean(data.archived),
+    // Governing: ADR-0004 — `pushed_at` (moves on commits), never
+    // `updated_at` (moves on metadata edits like stars/description and
+    // therefore does not indicate maintenance).
+    pushedAt: data.pushed_at ?? null,
+    reason: null,
+  };
 }
 
-/** previous === current -> true (frozen); known and different -> false; no baseline yet -> null (unknown). */
-function isVersionFrozen(pkg, previousVersions) {
-  const previous = previousVersions?.[pkg.id];
-  if (previous == null || pkg.latestVersion == null) return null;
-  return previous === pkg.latestVersion;
+/**
+ * `pushedAt` at least 12 months before `now` -> true (dormant); known and
+ * more recent -> false; missing/unparseable -> null (unknown, never evidence
+ * either way).
+ *
+ * Governing: ADR-0004 (12-month threshold, `pushed_at` not `updated_at`),
+ * SPEC-0001 REQ "Possibly Unmaintained Heuristic" (Scenario: Dormant
+ * repository, Scenario: Recently active repository).
+ */
+export function isDormant(pushedAt, now = new Date()) {
+  if (pushedAt == null) return null;
+  const pushedDate = new Date(pushedAt);
+  if (Number.isNaN(pushedDate.getTime())) return null;
+  const cutoff = new Date(now);
+  cutoff.setUTCMonth(cutoff.getUTCMonth() - 12);
+  return pushedDate.getTime() <= cutoff.getTime();
 }
 
 /**
@@ -379,33 +401,31 @@ function isVersionFrozen(pkg, previousVersions) {
  * proportional to actual candidates, respecting the unauthenticated rate
  * limit.
  *
- * Governing: SPEC-0001 REQ "Possibly Unmaintained Heuristic", SPEC-0001 REQ
- * "Fetch Concurrency and Caching" (reuses the same concurrency pool as the
- * manifest fetch pass).
+ * Governing: ADR-0004, SPEC-0001 REQ "Possibly Unmaintained Heuristic",
+ * SPEC-0001 REQ "Fetch Concurrency and Caching" (reuses the same concurrency
+ * pool as the manifest fetch pass).
  *
  * @param {Array} classifiedPackages - output of `classifyPackages(...).packages`
  * @param {object} [options]
- * @param {Object.<string,string>} [options.previousVersions] - packageId ->
- *   `latestVersion` observed on a prior check. See the "Foundry glue"
- *   section below for how this is persisted across logins in-world.
  * @param {typeof fetch} [options.fetchImpl]
  * @param {number} [options.concurrency]
  * @param {AbortSignal} [options.signal]
  * @param {typeof checkGithubArchived} [options.githubCheck] - injectable for tests
- * @returns {Promise<Array>} same packages, each gaining `versionFrozen`
- *   (boolean|null), `githubArchived` (boolean|null), and
- *   `possiblyUnmaintained` (boolean).
+ * @param {typeof Date} [options.now] - injectable "current time" for tests
+ * @returns {Promise<Array>} same packages, each gaining `githubArchived`
+ *   (boolean|null), `repoDormant` (boolean|null), and `possiblyUnmaintained`
+ *   (boolean).
  */
 export async function applyPossiblyUnmaintainedHeuristic(
   classifiedPackages,
   options = {}
 ) {
   const {
-    previousVersions = {},
     fetchImpl = fetch,
     concurrency = DEFAULT_CONCURRENCY,
     signal,
     githubCheck = checkGithubArchived,
+    now = new Date(),
   } = options;
 
   // Only packages already failing the verified check are eligible at all —
@@ -419,7 +439,7 @@ export async function applyPossiblyUnmaintainedHeuristic(
       const repo =
         parseGithubRepo(pkg.links?.url) ?? parseGithubRepo(pkg.links?.bugs);
       if (!repo) {
-        githubResultsById.set(pkg.id, { archived: null, reason: "not-a-github-repo" });
+        githubResultsById.set(pkg.id, { archived: null, pushedAt: null, reason: "not-a-github-repo" });
         return;
       }
       githubResultsById.set(pkg.id, await githubCheck(repo, { fetchImpl, signal }));
@@ -429,15 +449,16 @@ export async function applyPossiblyUnmaintainedHeuristic(
 
   return classifiedPackages.map((pkg) => {
     if (!pkg.failsVerifiedCheck) {
-      return { ...pkg, versionFrozen: null, githubArchived: null, possiblyUnmaintained: false };
+      return { ...pkg, githubArchived: null, repoDormant: null, possiblyUnmaintained: false };
     }
-    const versionFrozen = isVersionFrozen(pkg, previousVersions);
-    const githubArchived = githubResultsById.get(pkg.id)?.archived ?? null;
+    const githubResult = githubResultsById.get(pkg.id);
+    const githubArchived = githubResult?.archived ?? null;
+    const repoDormant = isDormant(githubResult?.pushedAt ?? null, now);
     // Both signals are boolean|null ("unknown"); Boolean(null) is false, so
     // an unknown signal never counts as evidence toward the flag (and,
     // since we only ever OR, never against it either).
-    const possiblyUnmaintained = Boolean(versionFrozen) || Boolean(githubArchived);
-    return { ...pkg, versionFrozen, githubArchived, possiblyUnmaintained };
+    const possiblyUnmaintained = Boolean(githubArchived) || Boolean(repoDormant);
+    return { ...pkg, githubArchived, repoDormant, possiblyUnmaintained };
   });
 }
 
@@ -464,50 +485,18 @@ export async function classifyCompatibility(results, gameRelease, options = {}) 
 // thin so the logic above stays testable without a running world.
 // ---------------------------------------------------------------------------
 
-// Governing: SPEC-0001 REQ "Possibly Unmaintained Heuristic" — "across
-// checks" (the frozen-version signal) has to mean across separate logins,
-// not just within one page load, since the login notification's frequency
-// setting ("every login"/"daily"/"only when changed") implies checks
-// recur across sessions. issue #6's session cache (a plain in-memory Map)
-// resets on every page load, so it can't serve this. A world-scoped setting
-// is the lightweight persistence option that actually matches "across
-// checks" — no new dependency, and world settings are the standard Foundry
-// mechanism for this kind of small persisted bookkeeping. It's marked
-// `config: false` since it's internal state, not a GM-facing option.
-export const PREVIOUS_VERSIONS_SETTING_KEY = "previousPackageVersions";
-
-/** Best-effort read of the previous-versions world setting; `{}` if unset/unavailable (e.g. setting not yet registered, or no world loaded). */
-export function loadPreviousVersions(gameInstance = globalThis.game) {
-  try {
-    return gameInstance?.settings?.get(MODULE_ID, PREVIOUS_VERSIONS_SETTING_KEY) ?? {};
-  } catch {
-    return {};
-  }
-}
-
-/** Best-effort write of the previous-versions world setting; failure here must never block classification results from being returned. */
-async function savePreviousVersions(versions, gameInstance = globalThis.game) {
-  try {
-    await gameInstance?.settings?.set(MODULE_ID, PREVIOUS_VERSIONS_SETTING_KEY, versions);
-  } catch {
-    // Best-effort persistence only — a failed save just means next check's
-    // "version frozen" signal falls back to "unknown" for these packages.
-  }
-}
-
 /**
  * Thin wrapper: fetches (or reuses already-fetched) active-package results,
- * runs the full classification pipeline against `game.release` and the
+ * and runs the full classification pipeline against `game.release` and the
  * comparison target (`game.data.coreUpdate` when available, else peer
- * inference — REQ "Target Version Determination"), and persists each
- * package's `latestVersion` to the world-scoped setting so the *next* check
- * can compare "has this manifest version changed since last time"
- * (SPEC-0001 REQ "Possibly Unmaintained Heuristic").
+ * inference — REQ "Target Version Determination"). The "possibly
+ * unmaintained" signal (ADR-0004) is read fresh from the GitHub API on every
+ * check, so there is no baseline to load or persist across logins.
  *
- * Governing: ADR-0001 (amended 2026-08-15), ADR-0002, SPEC-0001 REQ "Target
- * Version Determination", SPEC-0001 REQ "Inferred Latest Version",
- * SPEC-0001 REQ "Compatibility Severity Classification", SPEC-0001 REQ
- * "Possibly Unmaintained Heuristic".
+ * Governing: ADR-0001 (amended 2026-08-15), ADR-0002, ADR-0004, SPEC-0001
+ * REQ "Target Version Determination", SPEC-0001 REQ "Inferred Latest
+ * Version", SPEC-0001 REQ "Compatibility Severity Classification",
+ * SPEC-0001 REQ "Possibly Unmaintained Heuristic".
  *
  * @param {object} [options]
  * @param {object} [options.game] - defaults to globalThis.game
@@ -520,8 +509,6 @@ async function savePreviousVersions(versions, gameInstance = globalThis.game) {
  *   this module's own — Foundry's server populates it in-world.
  * @param {Array} [options.results] - pre-fetched results; when omitted, calls
  *   `checkActivePackages` (cached/concurrency-limited per issue #6)
- * @param {boolean} [options.persist] - set false to skip writing the
- *   previous-versions setting (e.g. a read-only preview)
  */
 export async function classifyActiveCompatibility(options = {}) {
   const gameInstance = options.game ?? globalThis.game;
@@ -539,22 +526,10 @@ export async function classifyActiveCompatibility(options = {}) {
     options.coreUpdate !== undefined ? options.coreUpdate : (gameInstance?.data?.coreUpdate ?? null);
   const results =
     options.results ?? (await checkActivePackages({ game: gameInstance, ...options }));
-  const previousVersions = options.previousVersions ?? loadPreviousVersions(gameInstance);
 
-  const classification = await classifyCompatibility(results, gameRelease, {
+  return classifyCompatibility(results, gameRelease, {
     ...options,
-    previousVersions,
     gameReleaseVersion,
     coreUpdate,
   });
-
-  if (options.persist !== false) {
-    const nextVersions = { ...previousVersions };
-    for (const pkg of classification.packages) {
-      if (pkg.latestVersion != null) nextVersions[pkg.id] = pkg.latestVersion;
-    }
-    await savePreviousVersions(nextVersions, gameInstance);
-  }
-
-  return classification;
 }
