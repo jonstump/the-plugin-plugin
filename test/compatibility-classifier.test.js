@@ -72,6 +72,75 @@ test("computeInferredLatest: ignores errored packages and packages with no verif
   assert.equal(value, null);
 });
 
+// --- Requirement: Inferred Latest Participation (SPEC-0002) ---------------
+// Fallback-sourced `compatibility.verified` values (provenance: "fallback",
+// per manifest-fetcher.js's buildOkResult / ADR-0003) MUST participate in
+// computeInferredLatest/determineComparisonTarget on the same terms as
+// declared-sourced values. computeInferredLatest itself never branches on
+// `provenance` at all -- these tests exercise that behavior directly rather
+// than assuming it.
+
+test("computeInferredLatest: a fallback-sourced verified value counts toward the peer signal exactly like a declared-sourced one", () => {
+  const declaredOnly = [
+    okPkg({ id: "a", provenance: "declared", verified: "13" }),
+    okPkg({ id: "b", provenance: "declared", verified: "14" }),
+  ];
+  const fallbackInstead = [
+    okPkg({ id: "a", provenance: "declared", verified: "13" }),
+    okPkg({ id: "b", provenance: "fallback", verified: "14" }),
+  ];
+
+  const fromDeclared = computeInferredLatest(declaredOnly, "13");
+  const fromFallback = computeInferredLatest(fallbackInstead, "13");
+
+  assert.equal(fromFallback.hasPeerSignal, true);
+  assert.equal(fromFallback.value, "14");
+  // Identical result regardless of which source produced the winning value.
+  assert.deepEqual(fromFallback, fromDeclared);
+});
+
+test("computeInferredLatest: peer signal recovered entirely via fallback-sourced results (SPEC-0002 'Peer signal recovered via fallback' scenario)", () => {
+  const results = [
+    okPkg({ id: "lib-wrapper", provenance: "fallback", verified: "14" }),
+    okPkg({ id: "smarttarget", provenance: "fallback", verified: "14" }),
+    okPkg({ id: "the-plugin-plugin", provenance: "declared", verified: "13" }),
+  ];
+  const { value, hasPeerSignal } = computeInferredLatest(results, "13");
+  assert.equal(hasPeerSignal, true);
+  assert.equal(value, "14");
+});
+
+test("determineComparisonTarget: falls back to peer inference built entirely from fallback-sourced verified values when no authoritative target is available", () => {
+  const results = [
+    okPkg({ id: "a", provenance: "fallback", verified: "14" }),
+    okPkg({ id: "b", provenance: "declared", verified: "13" }),
+  ];
+  const target = determineComparisonTarget(results, "13", {
+    coreUpdate: { hasUpdate: false, couldReachWebsite: false, version: null },
+    gameReleaseVersion: "13.351",
+  });
+  assert.equal(target.source, "inferred");
+  assert.equal(target.value, "14");
+  assert.equal(target.hasPeerSignal, true);
+});
+
+test("classifyPackages: a package's severity against a fallback-derived inferredLatest is computed the same as against a declared-derived one", () => {
+  // Only fallback-sourced results establish inferredLatest = 14 here; a
+  // third package with a hard ceiling below 14 must still classify as hard
+  // against it, proving the fallback-derived target is actually used
+  // downstream, not just computed and discarded.
+  const results = [
+    okPkg({ id: "leader", provenance: "fallback", verified: "14", compatibility: { verified: "14", maximum: null, minimum: null, compatibleCoreVersion: null } }),
+    okPkg({ id: "lagging", provenance: "declared", verified: "13", compatibility: { verified: "13", maximum: "13", minimum: null, compatibleCoreVersion: null } }),
+  ];
+  const { comparisonTarget, packages } = classifyPackages(results, "13");
+  assert.equal(comparisonTarget.source, "inferred");
+  assert.equal(comparisonTarget.value, "14");
+
+  const lagging = packages.find((p) => p.id === "lagging");
+  assert.equal(lagging.targetComparison.severity, "hard");
+});
+
 // --- determineComparisonTarget --------------------------------------------
 // Governing: ADR-0001 (amended 2026-08-15), SPEC-0001 REQ "Target Version
 // Determination", SPEC-0001 REQ "Inferred Latest Version".

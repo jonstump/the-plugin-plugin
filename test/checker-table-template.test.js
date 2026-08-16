@@ -253,6 +253,88 @@ test("row loop renders no empty-row fallback text when rows is non-empty", () =>
   assert.ok(!html.includes("THE-PLUGIN-PLUGIN.CheckerTable.Scanning"));
 });
 
+// --- Result provenance (per-row) --------------------------------------------
+// Governing: SPEC-0002 REQ "Result Provenance" — "The checker table MUST
+// visually distinguish a fallback-sourced row from a declared-sourced row"
+// / "a declared-sourced row carries no fallback marking." `row.provenance`
+// is the view-model `#buildRows` (scripts/checker-table.js) produces via
+// checker-table-logic.js's `deriveProvenanceInfo`.
+
+test("a declared-sourced row (row.provenance is null) renders no provenance marking", () => {
+  const html = template(baseContext({ rows: [row({ provenance: null })] }));
+  assert.ok(!html.includes("provenance-badge"));
+});
+
+test("a fallback-sourced row renders a visible text marking naming the source, not just a CSS class", () => {
+  const html = template(
+    baseContext({
+      rows: [
+        row({
+          provenance: {
+            statusClass: "fallback",
+            iconClass: "fa-code-branch",
+            note: "Read from the repository's default branch, not a published release.",
+          },
+        }),
+      ],
+    })
+  );
+  assert.ok(html.includes('class="provenance-badge fallback"'));
+  assert.ok(html.includes("fa-code-branch"));
+  // The load-bearing assertion: actual visible text content naming the
+  // source, not merely a class/icon a screen reader would skip over
+  // (Accessibility Requirements § Icon-Only Controls — MUST NOT rely on
+  // colour, position, or shape alone).
+  assert.ok(
+    html.includes("Read from the repository&#x27;s default branch, not a published release.") ||
+      html.includes("Read from the repository's default branch, not a published release.")
+  );
+  // MUST NOT ever describe fallback-sourced data as the latest
+  // published/released version (SPEC-0002 REQ "Result Provenance").
+  assert.ok(!/latest published/i.test(html));
+  assert.ok(!/\bthe released version\b/i.test(html));
+});
+
+test("the provenance marking introduces no new aria-live region (Accessibility Requirements § Dynamic Content Regions)", () => {
+  const html = template(
+    baseContext({
+      rows: [
+        row({
+          provenance: {
+            statusClass: "fallback",
+            iconClass: "fa-code-branch",
+            note: "Read from the repository's default branch, not a published release.",
+          },
+        }),
+      ],
+    })
+  );
+  const ariaLiveCount = (html.match(/aria-live=/g) ?? []).length;
+  // Exactly the one pre-existing scan-status region (SPEC-0001) — the
+  // provenance marking does not add a live region of its own.
+  assert.equal(ariaLiveCount, 1);
+});
+
+test("the provenance marking is not an interactive/focusable element (no new focus stop)", () => {
+  const html = template(
+    baseContext({
+      rows: [
+        row({
+          provenance: {
+            statusClass: "fallback",
+            iconClass: "fa-code-branch",
+            note: "Read from the repository's default branch, not a published release.",
+          },
+        }),
+      ],
+    })
+  );
+  const badgeMatch = html.match(/<span class="provenance-badge[^>]*>[\s\S]*?<\/span>/);
+  assert.ok(badgeMatch, "expected a provenance-badge span in the output");
+  assert.ok(!/<(a|button|input|select|textarea)\b/.test(badgeMatch[0]));
+  assert.ok(!/tabindex=/.test(badgeMatch[0]));
+});
+
 // --- Comparison target note ---------------------------------------------
 // Governing: ADR-0001 (amended 2026-08-15), SPEC-0001 REQ "Target Version
 // Determination", SPEC-0001 REQ "Inferred Latest Version" — "MUST

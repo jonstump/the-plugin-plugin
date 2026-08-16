@@ -92,6 +92,20 @@
   padding: 1rem;
 }
 
+/* Governing: SPEC-0002 REQ "Result Provenance" — a fallback-sourced row
+ * (data read from a repository's default branch rather than its declared
+ * manifest URL, per ADR-0003) is visually distinguished from a
+ * declared-sourced row, which renders no badge at all. The distinction is
+ * never carried by colour alone — see the visible text in
+ * templates/checker-table.hbs. */
+.the-plugin-plugin-checker-table .provenance-badge {
+  display: block;
+  margin-top: 0.15rem;
+  font-size: var(--font-size-11, 11px);
+  font-style: italic;
+  opacity: 0.85;
+}
+
 /* Visually hidden but available to screen readers — used for column headers
  * that are otherwise conveyed by icon-only controls in that column. */
 .the-plugin-plugin-checker-table .visually-hidden {

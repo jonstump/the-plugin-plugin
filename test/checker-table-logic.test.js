@@ -14,6 +14,7 @@ import {
   STATUS_LABEL_KEYS,
   deriveStatusLabelKey,
   deriveSeverityClass,
+  deriveProvenanceInfo,
   isPinned,
   togglePinned,
   resolveIssueLink,
@@ -87,6 +88,41 @@ test("deriveSeverityClass: passes through 'hard' and 'soft', null otherwise", ()
 
 test("deriveSeverityClass: null for an errored package regardless of a stale severity field", () => {
   assert.equal(deriveSeverityClass(okPkg({ status: "error", severity: "hard" })), null);
+});
+
+// --- deriveProvenanceInfo ---------------------------------------------------
+// Requirement: Result Provenance (SPEC-0002 REQ "Result Provenance")
+
+test("deriveProvenanceInfo: null for a declared-sourced package (no marking)", () => {
+  assert.equal(deriveProvenanceInfo(okPkg({ provenance: "declared" })), null);
+});
+
+test("deriveProvenanceInfo: null when provenance is absent/null (e.g. an error result)", () => {
+  assert.equal(deriveProvenanceInfo(okPkg({ provenance: null })), null);
+  assert.equal(deriveProvenanceInfo(okPkg({ provenance: undefined })), null);
+});
+
+test("deriveProvenanceInfo: null for a missing/null package", () => {
+  assert.equal(deriveProvenanceInfo(null), null);
+  assert.equal(deriveProvenanceInfo(undefined), null);
+});
+
+test("deriveProvenanceInfo: a fallback-sourced package gets a statusClass/iconClass/i18nKey view-model", () => {
+  const info = deriveProvenanceInfo(okPkg({ provenance: "fallback" }));
+  assert.ok(info);
+  assert.equal(info.statusClass, "fallback");
+  assert.ok(info.iconClass && info.iconClass.length > 0);
+  assert.equal(info.i18nKey, "THE-PLUGIN-PLUGIN.CheckerTable.ProvenanceFallbackNote");
+});
+
+test("deriveProvenanceInfo: never calls game/foundry i18n itself — returns a key, not localized text", () => {
+  // Governing: this file's docstring — checker-table-logic.js stays
+  // dependency-free (no `game`/`foundry` reference), matching
+  // deriveStatusLabelKey/deriveSeverityClass. The i18nKey is a
+  // THE-PLUGIN-PLUGIN.* localization key, not human-readable prose;
+  // checker-table.js is responsible for resolving it via game.i18n.
+  const info = deriveProvenanceInfo(okPkg({ provenance: "fallback" }));
+  assert.match(info.i18nKey, /^THE-PLUGIN-PLUGIN\./);
 });
 
 // --- pin toggle set logic --------------------------------------------------

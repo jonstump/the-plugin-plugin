@@ -104,6 +104,52 @@ export function deriveSeverityClass(pkg) {
 }
 
 // ---------------------------------------------------------------------------
+// Requirement: Result Provenance (SPEC-0002)
+// ---------------------------------------------------------------------------
+
+/**
+ * Derives the per-row provenance marking for a package whose manifest was
+ * read via the raw.githubusercontent.com fallback (ADR-0003) rather than
+ * from its own declared manifest URL. Returns `null` for a declared-sourced
+ * package, and for any package with no provenance value at all (e.g. an
+ * error result, where `provenance` is `null` per manifest-fetcher.js) — a
+ * declared-sourced row carries no marking, per SPEC-0002 REQ "Result
+ * Provenance" ("Declared-sourced row" scenario).
+ *
+ * Mirrors the shape `#buildComparisonTargetContext`
+ * (scripts/checker-table.js) already establishes for a near-identical
+ * "authoritative vs. inferred" distinction, but scoped per-row rather than
+ * window-level: `statusClass`/`iconClass` give the template a visual hook,
+ * `i18nKey` names the localization string checker-table.js resolves via
+ * `game.i18n` (kept out of this file so it stays dependency-free and
+ * Node-testable, matching `deriveStatusLabelKey`/`deriveSeverityClass`
+ * above — no `game`/i18n reference here).
+ *
+ * Governing: SPEC-0002 REQ "Result Provenance", SPEC-0002 REQ "Inferred
+ * Latest Participation" (this function only concerns display; participation
+ * in `inferredLatest` is unconditional by construction in
+ * compatibility-classifier.js's `computeInferredLatest`, which does not
+ * branch on `provenance` at all), ADR-0003 "Confirmation" (a fallback result
+ * MUST be distinguishable to the GM, both in the data model and in the UI).
+ * CLAUDE.md project rule 1: the marking names the data source only — it
+ * never implies the package itself is behind, neglected, or at fault, and
+ * never calls fallback-sourced data "latest published"/"released".
+ *
+ * @param {object} pkg - a fetched/classified package result (needs
+ *   `provenance`, the field manifest-fetcher.js's `buildOkResult`/
+ *   `errorResult` already set on every result)
+ * @returns {{statusClass: 'fallback', iconClass: string, i18nKey: string}|null}
+ */
+export function deriveProvenanceInfo(pkg) {
+  if (!pkg || pkg.provenance !== "fallback") return null;
+  return {
+    statusClass: "fallback",
+    iconClass: "fa-code-branch",
+    i18nKey: "THE-PLUGIN-PLUGIN.CheckerTable.ProvenanceFallbackNote",
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Requirement: Pinned Critical Modules — pin/star toggle set logic
 // ---------------------------------------------------------------------------
 

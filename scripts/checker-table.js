@@ -17,6 +17,7 @@ import { classifyActiveCompatibility } from "./compatibility-classifier.js";
 import {
   deriveStatusLabelKey,
   deriveSeverityClass,
+  deriveProvenanceInfo,
   isPinned,
   togglePinned,
   resolveIssueLink,
@@ -237,6 +238,7 @@ export class CheckerTableApp extends HandlebarsApplicationMixin(ApplicationV2) {
       const severityClass = deriveSeverityClass(pkg);
       const issueLink = resolveIssueLink(pkg.links);
       const title = pkg.title ?? pkg.id;
+      const provenanceInfo = deriveProvenanceInfo(pkg);
 
       return {
         id: pkg.id,
@@ -247,6 +249,18 @@ export class CheckerTableApp extends HandlebarsApplicationMixin(ApplicationV2) {
         statusLabel: game.i18n.localize(STATUS_LABEL_I18N_KEYS[statusLabelKey]),
         statusLabelKey,
         severityClass,
+        // Governing: SPEC-0002 REQ "Result Provenance" — null for a
+        // declared-sourced row (no marking rendered at all, per the
+        // "Declared-sourced row" scenario); the localization call belongs
+        // here rather than in checker-table-logic.js's pure
+        // `deriveProvenanceInfo`, same split already used for `statusLabel`.
+        provenance: provenanceInfo
+          ? {
+              statusClass: provenanceInfo.statusClass,
+              iconClass: provenanceInfo.iconClass,
+              note: game.i18n.localize(provenanceInfo.i18nKey),
+            }
+          : null,
         isPinned: pinned,
         links: {
           url: pkg.links?.url ?? null,
