@@ -22,6 +22,19 @@ extends: [ADR-0001]
 > *ahead* of a release. That was half right: the risk is bidirectional, and
 > the *behind* direction is the harmful one. See "Amendment" at the end.
 
+> ## ⚠️ Amended 2026-08-16 (2) — GitHub release-tag resolution
+>
+> The first amendment fixed the harm by declaring `version` unknown for
+> every fallback-sourced result. That is safe but expensive: on the real
+> test world, 3 of 4 fallback-resolved packages (`lib-wrapper`,
+> `smarttarget`, `the-plugin-plugin`) have real GitHub releases with
+> real, accurate `version` data sitting one API call away — we chose not
+> to look. This amendment reverses that, spending part of the rate-limit
+> budget the original decision protected, because the condition that
+> decision named for revisiting it — *"observed HEAD-vs-release skew
+> proves harmful enough to justify paying the API rate-limit cost"* — has
+> now been observed. See "Amendment 2" at the end.
+
 ## Context and Problem Statement
 
 SPEC-0001's manifest check fetches every active package's declared
@@ -445,3 +458,155 @@ Two smaller items observed at the same time, for the same amendment:
   `title`**. It is not colour-only, so it does not violate SPEC-0002's
   accessibility requirement outright, but the requirement asks for a text
   alternative naming the source specifically.
+
+Both follow-ups were resolved directly in the fix (issue #48): the header
+question was left as-is (a deliberate KISS call, documented in that PR),
+and the `aria-label` gap was closed.
+
+## Amendment 2 — 2026-08-16, GitHub release-tag resolution
+
+### What changed since the last amendment
+
+Issue #58 reported that most rows in a real checker table read "Couldn't
+check" / "Verified, update unknown" rather than a real status, after
+ADR-0006 correctly stopped lying about update availability. Investigating
+live, in-world:
+
+| Package | Fallback path today | Real GitHub release exists? |
+|---|---|---|
+| `lib-wrapper` | raw/HEAD, `version` unused | yes — `v1.13.5.1` |
+| `smarttarget` | raw/HEAD, `version` unused | yes — `4.0.0` |
+| `the-plugin-plugin` | raw/HEAD, `version` unused | no (no release published yet) |
+
+Two of three fallback-resolved packages have a real, accurate release one
+API call away. We chose not to look, for the reason stated in this ADR's
+original Decision Drivers: the unauthenticated 60/hour budget is shared
+with SPEC-0001 REQ "Possibly Unmaintained Heuristic", and this ADR's own
+"Considered Options" declined the API-based approach specifically to
+protect that budget.
+
+Verified live before deciding anything:
+
+```
+GET https://api.github.com/repos/{owner}/{repo}/releases/latest
+access-control-allow-origin: *                    ← CORS-open, confirmed
+tag_name for lib-wrapper:  "v1.13.5.1"
+tag_name for smarttarget:  "4.0.0"                 ← matches the manual
+                                                       finding in Amendment 1
+```
+
+The "Revisit if" note at the end of the original decision named this exact
+trigger: *"observed HEAD-vs-release skew proves harmful enough to justify
+paying the API rate-limit cost for tag resolution."* Amendment 1 is the
+observation; this is the revisit.
+
+### Decision
+
+For a package whose declared URL fails and whose fallback URL is
+GitHub-hosted, **attempt tag resolution before falling back to raw/HEAD**:
+
+1. `GET /repos/{owner}/{repo}/releases/latest` (one `api.github.com`
+   call, budget-gated — see below).
+2. On success, fetch the manifest **at that tag**:
+   `raw.githubusercontent.com/{owner}/{repo}/{tag_name}/{filename}` (a
+   `raw.githubusercontent.com` request, not `api.github.com` — does not
+   draw down the API rate limit).
+3. On success, this is the package's actual **released** manifest — both
+   `version` and `compatibility.verified` are trustworthy, the same as a
+   declared-sourced result. Recorded with a third provenance value,
+   `release`, distinct from `fallback` (raw/HEAD, still-untrusted
+   `version`).
+4. On failure at **any** step (no releases published, rate-limited,
+   network error, the tag-resolved fetch itself 404s), fall through to
+   today's raw/HEAD fallback unchanged. `the-plugin-plugin` — no
+   releases published yet — is the concrete case this preserves.
+
+This was Considered Option 3 in the original decision ("Use the GitHub API
+(`releases/latest`) to resolve the release tag, then fetch
+`raw.githubusercontent.com/<owner>/<repo>/<tag>/<file>`"), rejected then
+for cost, chosen now because the cost of *not* doing it — silently
+discarding real, available update data for the common case — has proven
+larger than the rate-limit risk, once that risk is actually bounded (next
+section).
+
+### Rate-limit budget: shared, local, best-effort
+
+The original decision's real objection wasn't the API call itself — it was
+an *unbounded* number of them competing with REQ "Possibly Unmaintained
+Heuristic" for the same 60/hour pool, failing in a way that "checks fine in
+the morning, mysteriously fails an hour later." That risk is addressed
+directly, not waved away:
+
+- A single **shared, scan-scoped budget counter** (`{ remaining: N }`,
+  default `N = 50` — a deliberately conservative reserve under the 60/hour
+  ceiling, not a measured optimum) is created once per
+  `classifyActiveCompatibility` call and passed to **both** consumers of
+  `api.github.com`: this amendment's tag-resolution calls, and the
+  existing `checkGithubArchived` calls (SPEC-0001 REQ "Possibly
+  Unmaintained Heuristic").
+- Each consumer decrements the shared counter **before** making a call, and
+  skips the call — degrading to its existing non-API behavior — once the
+  counter reaches zero. Tag resolution degrades to raw/HEAD; the
+  unmaintained heuristic degrades to "unknown," exactly as it already does
+  on any other API failure.
+- This is a **local, approximate** budget, not a live read of GitHub's own
+  `X-RateLimit-Remaining`. It does not, and does not need to, account for
+  other GitHub API usage happening outside this scan. Real exhaustion
+  (e.g. a GM who has been re-scanning repeatedly) still degrades
+  gracefully through the existing per-package error-isolation path
+  (SPEC-0001 REQ "Error Handling Standards") — a 403/429 from GitHub is
+  just another fetch failure that a package already knows how to handle.
+  The budget counter's job is only to avoid *proactively* spending the
+  whole pool in one scan of a large modlist, not to guarantee a number.
+- KISS (project rule 2): live cross-request coordination against GitHub's
+  actual rate-limit headers under a concurrency-6 pool is real complexity
+  for a soft, best-effort constraint. A local counter is boring, testable
+  by injecting the budget as an option, and sufficient — a hard guarantee
+  isn't available anyway, since the true shared resource is external.
+
+### Consequences
+
+* Good, because it recovers accurate update data for the common
+  fallback-resolved case (2 of 3 in the tested world) — the exact
+  information ADR-0006's fix correctly stopped fabricating, now obtained
+  honestly instead of discarded.
+* Good, because the failure mode this ADR originally worried about
+  (confusing, time-dependent rate-limit exhaustion) is bounded by a local
+  budget shared with the other API consumer, not left open-ended.
+* Good, because every degradation path (no release, rate-limited, tag
+  fetch 404s) falls through to already-correct, already-tested behavior —
+  this amendment adds a better *first* attempt, not a new failure mode.
+* Neutral, because the budget is approximate, not a hard guarantee — real
+  exhaustion still degrades gracefully via existing error isolation, so
+  the worst case is "some rows read like today," not breakage.
+* Bad, because it reintroduces a real rate-limit cost this project spent
+  effort avoiding — a GM with a very large, mostly-fallback modlist could
+  still see more "Couldn't check"/"unknown" results than a would-be
+  unlimited API budget would produce. Accepted: bounded and honest beats
+  unbounded and fabricated.
+
+### Confirmation
+
+Code review against this amendment should reject:
+
+* any tag-resolution call that does not check and decrement the shared
+  budget counter first;
+* any implementation where the tag-resolution budget and the possibly-
+  unmaintained-heuristic budget are tracked separately rather than shared;
+* any code path that surfaces `release`-provenance data without having
+  actually fetched the manifest at the resolved tag (i.e., using the tag
+  name alone as if it were the manifest);
+* a missing degrade-to-raw/HEAD path for any of: no releases published,
+  non-200/network failure on the API call, non-200/network failure on the
+  tag-resolved raw fetch.
+
+## More Information (Amendment 2)
+
+* Governing: SPEC-0002 REQ "Fallback Scope and Limits" (revises the "MUST
+  NOT contact the GitHub API" constraint into a budget-gated one), new REQ
+  "Release Tag Resolution", REQ "Result Provenance" (third provenance
+  value).
+* Revisit if: the local budget default (50) proves too conservative or too
+  generous in practice; GitHub's rate-limit behavior changes; or a GM
+  reports the "checks fine, then doesn't" pattern this design exists to
+  prevent.
