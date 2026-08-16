@@ -20,13 +20,16 @@ seven packages returned "Couldn't check."
 This capability adds a second, CORS-open attempt when the declared URL
 fails: a `raw.githubusercontent.com` URL derived from the declared URL
 itself, for `github.com`-hosted packages. A `cdn.statically.io` mirror URL
-serves the same role for `gitlab.com`-hosted packages, since GitLab's own
-raw-file endpoint and API are not CORS-open (ADR-0008, amended
-2026-08-16). It realizes ADR-0003 and ADR-0008 and extends SPEC-0001's
-manifest-check behavior rather than replacing it — the declared URL
-remains the primary and preferred source, and every existing SPEC-0001
-guarantee (per-package error isolation, concurrency capping, session
-caching) continues to hold unchanged.
+serves the same role for `gitlab.com`- and `bitbucket.org`-hosted
+packages, since neither host's own raw-file endpoint is CORS-open in the
+way that matters here — GitLab's not at all, Bitbucket's only when the
+request carries an `Origin` header, which its Downloads feature (release
+assets) still fails regardless (ADR-0008, amended 2026-08-16). It realizes
+ADR-0003 and ADR-0008 and extends SPEC-0001's manifest-check behavior
+rather than replacing it — the declared URL remains the primary and
+preferred source, and every existing SPEC-0001 guarantee (per-package
+error isolation, concurrency capping, session caching) continues to hold
+unchanged.
 
 Because the fallback reads a repository's default branch rather than its
 released tag, the data it produces is **not** equivalent to the data the
@@ -92,8 +95,8 @@ The system SHALL derive the fallback URL from the package's **declared
 manifest URL**, and MUST NOT derive it from the fetched manifest body.
 
 - The system MUST parse `<owner>` and `<repo>` from the declared manifest
-  URL when that URL is a `github.com` or `gitlab.com` URL (per ADR-0008
-  Amendment, 2026-08-16).
+  URL when that URL is a `github.com`, `gitlab.com`, or `bitbucket.org` URL
+  (per ADR-0008 Amendments, 2026-08-16).
 - The system MUST NOT source `<owner>`/`<repo>` from the fetched manifest's
   `url` or `bugs` fields. Those fields live inside the manifest body, which
   is by definition unavailable on the path where the fallback is required.
@@ -102,12 +105,16 @@ manifest URL**, and MUST NOT derive it from the fetched manifest body.
   declare `system.json`.
 - For a `github.com`-hosted declared URL, the derived URL MUST take the
   form `https://raw.githubusercontent.com/<owner>/<repo>/HEAD/<filename>`.
-- For a `gitlab.com`-hosted declared URL, the derived URL MUST take the
-  form `https://cdn.statically.io/gl/<owner>/<repo>@HEAD/<filename>` (per
-  ADR-0008 Amendment) — a third-party CORS-open mirror, since GitLab's own
-  raw-file endpoint sends no `Access-Control-Allow-Origin` header
-  (measured, ADR-0008). Both forms resolve `HEAD` to the actual default
-  branch without a prior lookup.
+- For a `gitlab.com`- or `bitbucket.org`-hosted declared URL, the derived
+  URL MUST take the form
+  `https://cdn.statically.io/gl/<owner>/<repo>@HEAD/<filename>` or
+  `https://cdn.statically.io/bb/<owner>/<repo>@HEAD/<filename>`
+  respectively (per ADR-0008 Amendments) — a third-party CORS-open mirror,
+  since neither host's own raw-file endpoint is reliably CORS-open for
+  this module's purposes (GitLab: never; Bitbucket: only with an `Origin`
+  header present on its `raw/` path, and not at all on its Downloads
+  feature — measured, ADR-0008 Amendment 3). All forms resolve `HEAD` to
+  the actual default branch without a prior lookup.
 
 #### Scenario: Module manifest URL (GitHub)
 
@@ -123,6 +130,14 @@ manifest URL**, and MUST NOT derive it from the fetched manifest body.
   (`https://gitlab.com/<owner>/<repo>/...`) and that URL fails
 - **THEN** the system requests
   `https://cdn.statically.io/gl/<owner>/<repo>@HEAD/<filename>`, with
+  `<owner>`, `<repo>`, and `<filename>` parsed from the declared URL
+
+#### Scenario: Module manifest URL (Bitbucket)
+
+- **WHEN** a package declares a `bitbucket.org`-hosted manifest URL
+  (`https://bitbucket.org/<owner>/<repo>/...`) and that URL fails
+- **THEN** the system requests
+  `https://cdn.statically.io/bb/<owner>/<repo>@HEAD/<filename>`, with
   `<owner>`, `<repo>`, and `<filename>` parsed from the declared URL
 
 #### Scenario: Game system manifest URL
@@ -142,32 +157,36 @@ manifest URL**, and MUST NOT derive it from the fetched manifest body.
 ### Requirement: Fallback Scope and Limits
 
 The system SHALL restrict the fallback to packages whose declared manifest
-URL is a `github.com` or `gitlab.com` URL (per ADR-0008 Amendment,
-2026-08-16), and SHALL report an honest "Couldn't check" for every package
-the fallback cannot serve.
+URL is a `github.com`, `gitlab.com`, or `bitbucket.org` URL (per ADR-0008
+Amendments, 2026-08-16), and SHALL report an honest "Couldn't check" for
+every package the fallback cannot serve.
 
 - The system MUST NOT attempt a fallback for packages hosted anywhere other
-  than `github.com` or `gitlab.com` — there is no CORS-open path (own or
-  third-party mirror) known for any other host, per ADR-0008.
+  than `github.com`, `gitlab.com`, or `bitbucket.org` — there is no
+  CORS-open path (own or third-party mirror) known for any other host, per
+  ADR-0008. This includes self-hostable forges (e.g. Gitea/Forgejo) by
+  construction: no third-party mirror can exist for a host with no fixed
+  domain a CDN could build support for.
 - The system MUST treat a non-200 response from the fallback URL as a
   terminal failure for that package, with no further attempts.
-- The system MUST NOT attempt fallback-of-fallback logic for the GitLab
-  path (e.g. retrying a second mirror if `cdn.statically.io` fails) — per
-  ADR-0008 Amendment, that failure degrades to "Couldn't check" exactly as
-  it would have without this fallback at all, deliberately not engineered
-  around further.
+- The system MUST NOT attempt fallback-of-fallback logic for the GitLab or
+  Bitbucket paths (e.g. retrying a second mirror if `cdn.statically.io`
+  fails) — per ADR-0008 Amendments, that failure degrades to "Couldn't
+  check" exactly as it would have without this fallback at all,
+  deliberately not engineered around further.
 - The system MAY contact the GitHub API as part of resolving a package's
   GitHub-hosted fallback, per REQ "Release Tag Resolution" (ADR-0003
   Amendment 2, 2026-08-16) — but only within the shared rate-limit budget
   that requirement defines, which also governs SPEC-0001 REQ "Possibly
   Unmaintained Heuristic"'s own GitHub API usage. Neither consumer may
   spend the budget independently of the other. This does not apply to the
-  GitLab path, which has no equivalent release-tag API available.
+  GitLab or Bitbucket paths, neither of which has an equivalent
+  release-tag API this module uses.
 
 #### Scenario: Unsupported host
 
 - **WHEN** a package declares a manifest URL on a host other than
-  `github.com` or `gitlab.com`, and that URL fails
+  `github.com`, `gitlab.com`, or `bitbucket.org`, and that URL fails
 - **THEN** the system records "Couldn't check" without attempting any
   fallback request. This is a permanent limitation for hosts with no known
   CORS-open path, own or third-party, not a pending gap — see ADR-0008.
@@ -181,6 +200,14 @@ the fallback cannot serve.
 - **THEN** the system records "Couldn't check" for that package — the
   same outcome as if the GitLab fallback did not exist, per ADR-0008
   Amendment's explicit no-engineering-around-it stance
+
+#### Scenario: Bitbucket mirror fails
+
+- **WHEN** a package's declared URL is `bitbucket.org`-hosted and fails
+  (most commonly a Downloads-feature URL, per ADR-0008 Amendment 3), and
+  the `cdn.statically.io` mirror fetch also fails
+- **THEN** the system records "Couldn't check" for that package — the
+  same outcome as if the Bitbucket fallback did not exist
 
 #### Scenario: Manifest absent from the default branch
 
@@ -297,8 +324,8 @@ governed by REQ "Fallback Field Trust".
 #### Scenario: Fallback-sourced row
 
 - **WHEN** a package's data was obtained via the default-branch fallback
-  URL (`raw.githubusercontent.com` or the `cdn.statically.io` GitLab
-  mirror)
+  URL (`raw.githubusercontent.com` or the `cdn.statically.io` GitLab/
+  Bitbucket mirror)
 - **THEN** the checker table marks that row as sourced from the
   repository's default branch rather than a published release
 

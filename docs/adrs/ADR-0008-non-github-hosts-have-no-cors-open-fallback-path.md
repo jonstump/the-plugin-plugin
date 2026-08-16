@@ -17,6 +17,18 @@ extends: [ADR-0003]
 > `raw.githubusercontent.com/.../HEAD/...`. The "accept and document as
 > permanent" decision below is revised — see "Amendment" at the end.
 
+> ## ⚠️ Amended 2026-08-16 (2) — Bitbucket support added, and a methodology gap fixed
+>
+> First reported informally (verbally, not written here) as "no CORS-open
+> path for Bitbucket, same as GitLab." That was wrong, and wrong for a
+> specific, correctable reason: the verification method (`curl` without an
+> explicit `Origin` header) cannot detect a CORS setup that *reflects* the
+> requesting origin instead of sending a static `*` — which is exactly what
+> Bitbucket's `raw/` endpoint does. A real browser (and `curl -H "Origin:
+> ..."`) shows it's genuinely CORS-open. See "Amendment 3" at the end for
+> the full picture, including where Bitbucket's actual CORS gap really is
+> (its Downloads feature, not raw file access).
+
 ## Context and Problem Statement
 
 SPEC-0002's fallback mechanism (ADR-0003) is scoped to `github.com`-hosted
@@ -263,3 +275,116 @@ failing and packages degrade to "Couldn't check," the pre-amendment
 baseline. No urgent action required if that happens; revisit only if a
 better-suited mirror or a change in GitLab's own CORS policy makes this
 amendment worth replacing.
+
+## Amendment 3 — 2026-08-16, Bitbucket: a methodology gap, and where the real gap is
+
+### The methodology gap
+
+Bitbucket was informally reported as "no CORS-open path, like GitLab" —
+wrong, and wrong in a way worth recording so it isn't repeated. Every prior
+measurement in this ADR used `curl` **without** an explicit `Origin`
+header. That's a blind spot: `curl` never identifies itself as a browser
+origin unless told to, and a server whose CORS logic *reflects* the
+requesting origin (rather than sending a static `*`, as GitHub,
+`raw.githubusercontent.com`, and `cdn.statically.io` all do) will
+correctly, silently omit `Access-Control-Allow-Origin` for a request with
+no `Origin` header — producing a false "not CORS-open" reading for a host
+that actually is.
+
+```
+GET https://bitbucket.org/rpgframework-cloud/shadowrun6-eden/raw/master/system.json
+  (no Origin header, curl default)      -> no Access-Control-Allow-Origin
+  -H "Origin: http://localhost:30000"   -> access-control-allow-origin: *
+```
+
+Confirmed live in an actual browser too — `fetch()` against this exact URL
+returns `type: "cors"`, `status: 200`, fully readable. GitLab and GitHub's
+declared URLs were re-checked with an explicit `Origin` header at the same
+time, as a sanity check against having made the identical mistake there:
+both still show no CORS header even with `Origin` present, so the
+already-shipped GitLab fallback (Amendment above) is unaffected and its
+conclusion stands. **Going forward, CORS verification in this project MUST
+include an explicit `Origin` header** (`curl -H "Origin: <plausible-value>"
+...`) — omitting it is not a neutral simplification, it's a test that can
+only ever produce false negatives, never false positives.
+
+### Where Bitbucket's real gap is
+
+Bitbucket has two distinct file-serving surfaces, and they differ:
+
+- **`bitbucket.org/<owner>/<repo>/raw/<branch>/<file>`** (source browsing,
+  the equivalent of `raw.githubusercontent.com` or GitLab's `-/raw/`) —
+  genuinely CORS-open, reflects `Origin`. A package declaring this as its
+  manifest URL needs **no fallback at all** — the declared attempt already
+  succeeds, the same way `multilevel-tokens` already declares a
+  `raw.githubusercontent.com` URL directly (ADR-0003) and needs nothing
+  extra.
+- **Bitbucket "Downloads"** (uploaded release artifacts, Bitbucket's rough
+  equivalent of a GitHub release asset) — 302-redirects to a presigned S3
+  URL that sends no CORS header at all, `Origin` or not. This is the actual
+  gap, and it's the same shape as GitHub's `releases/latest/download/...`
+  problem that started ADR-0003 in the first place.
+
+Real-world evidence for both halves, from the one Bitbucket-hosted Foundry
+package found (`rpgframework-cloud/shadowrun6-eden`, a Shadowrun 6 system):
+
+```
+raw/master/system.json          -> 200, CORS-open with Origin, real content
+                                    (the "raw/ needs no fallback" case)
+downloads/system-staging.json   -> 302 -> S3, no CORS at all
+                                    (the "Downloads is the real gap" case)
+raw/master/system-staging.json  -> 404 (not committed to git source)
+cdn.statically.io mirror of it  -> 404 (same reason — the fallback can't
+                                    invent data that was never in source)
+```
+
+That last pair means this specific package's Downloads-hosted manifest
+variant is a real **negative** case for the fallback — the same shape as
+GitLab's `pings`/`settings-extender` (ADR-0003/ADR-0008 above): a genuinely
+broken declared URL whose data was never committed to git at all, so no
+CORS fix, real or mirrored, can recover it. No real positive proof of the
+Bitbucket-Downloads-fallback-actually-recovering-data case was found;
+`raw/`'s own CORS support is the real positive proof, just of a different
+fact (no fallback needed at all).
+
+### Decision
+
+Add `bitbucket.org` alongside `gitlab.com` as a third host `deriveFallbackUrl`
+derives a `cdn.statically.io/bb/<owner>/<repo>@HEAD/<filename>` mirror URL
+for, on identical terms to the GitLab case: same trust rules (REQ "Fallback
+Field Trust" governs it, `version` unknown), same no-engineering-around-it
+stance (no fallback-of-fallback, degrades to today's baseline on failure).
+Bitbucket's own REST API also reflects `Origin` correctly when tested
+properly (`access-control-allow-origin: *` on `api.bitbucket.org`), noted
+for completeness — not used here, since there's no Bitbucket equivalent to
+ADR-0003 Amendment 2's GitHub release-tag resolution to build on it.
+
+### Consequences
+
+* Good, because the Bitbucket Downloads gap (the actual broken convention)
+  now has the same fallback coverage GitHub and GitLab already have,
+  bounded by the same honest degrade-to-baseline guarantee.
+* Good, because the methodology fix (always send `Origin`) prevents this
+  specific mistake from recurring for any future host investigated.
+* Neutral, because packages already using Bitbucket's `raw/` convention are
+  entirely unaffected — they already worked, and still do.
+* Bad, because — same as the GitLab amendment — this is a real, unhedged
+  dependency on `cdn.statically.io` staying up, now serving two hosts'
+  worth of fallback traffic instead of one.
+
+### Confirmation
+
+Code review should reject: any Bitbucket-fallback implementation that
+skips the shared trust rules (REQ "Fallback Field Trust") that already
+govern the GitHub and GitLab fallbacks; and any future CORS verification
+in this project's ADRs that omits an explicit `Origin` header when testing
+`curl` against a candidate host — cite this amendment as the reason that
+specific mistake is not acceptable to repeat.
+
+### Revisit if
+
+`cdn.statically.io` becomes unreliable for the Bitbucket path specifically
+(unlikely to differ from the GitLab path's fate, but worth checking
+independently if reported); or Bitbucket's Downloads feature changes to
+route through a CORS-open path directly, making the mirror unnecessary for
+that case too.

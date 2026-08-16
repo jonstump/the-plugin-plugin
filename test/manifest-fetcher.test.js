@@ -199,8 +199,13 @@ test("deriveFallbackUrl carries system.json through rather than hardcoding modul
 });
 
 test("deriveFallbackUrl returns null for a host with no known CORS-open path (ADR-0008)", () => {
+  // codeberg.org — a major public Gitea/Forgejo instance, verified (ADR-0008
+  // Amendment 3) to have no CORS header on its own raw endpoint, and no
+  // generic third-party mirror exists for self-hostable forges by
+  // construction (unlike github.com/gitlab.com/bitbucket.org, which are
+  // fixed, well-known domains a CDN can build support for by name).
   assert.equal(
-    deriveFallbackUrl("https://bitbucket.org/owner/repo/downloads/module.json"),
+    deriveFallbackUrl("https://codeberg.org/owner/repo/raw/branch/main/module.json"),
     null
   );
   assert.equal(deriveFallbackUrl("https://example.com/module.json"), null);
@@ -222,6 +227,26 @@ test("deriveFallbackUrl derives a cdn.statically.io URL for a gitlab.com-hosted 
 test("deriveFallbackUrl carries system.json through for a gitlab.com-hosted game system", () => {
   const fallback = deriveFallbackUrl("https://gitlab.com/owner/some-system/-/raw/main/system.json");
   assert.equal(fallback, "https://cdn.statically.io/gl/owner/some-system@HEAD/system.json");
+});
+
+// --- deriveFallbackUrl: bitbucket.org (ADR-0008 Amendment 3, 2026-08-16) ---
+// Bitbucket's own raw-file endpoint also sends no Access-Control-Allow-Origin
+// header (measured, ADR-0008 Amendment 3) — same cdn.statically.io mirror
+// pattern as GitLab, `/bb/` instead of `/gl/`.
+
+test("deriveFallbackUrl derives a cdn.statically.io URL for a bitbucket.org-hosted declared URL", () => {
+  const fallback = deriveFallbackUrl(
+    "https://bitbucket.org/rpgframework-cloud/shadowrun6-eden/raw/master/system.json"
+  );
+  assert.equal(
+    fallback,
+    "https://cdn.statically.io/bb/rpgframework-cloud/shadowrun6-eden@HEAD/system.json"
+  );
+});
+
+test("deriveFallbackUrl carries module.json through for a bitbucket.org-hosted module", () => {
+  const fallback = deriveFallbackUrl("https://bitbucket.org/owner/some-module/raw/main/module.json");
+  assert.equal(fallback, "https://cdn.statically.io/bb/owner/some-module@HEAD/module.json");
 });
 
 test("deriveFallbackUrl returns null when it can't parse owner/repo/filename", () => {
@@ -428,9 +453,9 @@ test("fetchPackageManifest carries system.json through the fallback for a game s
 
 test("fetchPackageManifest does not attempt a fallback for a host with no known CORS-open path", async () => {
   const pkg = {
-    id: "bitbucket-mod",
-    title: "Bitbucket Mod",
-    manifestUrl: "https://bitbucket.org/owner/bitbucket-mod/downloads/module.json",
+    id: "codeberg-mod",
+    title: "Codeberg Mod",
+    manifestUrl: "https://codeberg.org/owner/codeberg-mod/raw/branch/main/module.json",
     installedVersion: "1.0.0",
   };
   let calls = 0;
@@ -502,6 +527,214 @@ test("fetchPackageManifest: gitlab.com fallback also fails -> Couldn't check, sa
   assert.equal(result.status, "error");
   assert.equal(result.provenance, null);
   assert.ok(result.error.message.includes("cdn.statically.io"));
+});
+
+// Governing: ADR-0008 Amendment — real-world positive proof, not just a
+// synthetic fixture. `ManeaRoliste/manea-maps` is a genuinely published
+// GitLab-hosted Foundry module whose manifest IS committed to the repo
+// root (unlike pings/settings-extender's CI-artifact case). Verified live
+// in an actual CORS-enforcing browser (not Node's fetch, which never
+// enforces CORS at all and would pass this trivially for the wrong
+// reason): the declared gitlab.com/-/raw/ URL genuinely CORS-blocks (no
+// Access-Control-Allow-Origin, confirmed via curl), the cdn.statically.io
+// fallback genuinely resolves it, and the response is this module's real,
+// current manifest content, reproduced verbatim below. This module also
+// predates Foundry's `compatibility` object schema (Foundry v9-era), so
+// it incidentally exercises SPEC-0001 REQ "Manifest Check"'s legacy
+// `compatibleCoreVersion` fallback through the GitLab mirror path too.
+test("fetchPackageManifest: real-world GitLab module (manea-maps) with a manifest committed to the repo root resolves via the fallback", async () => {
+  const pkg = {
+    id: "manea-maps",
+    title: "Manea's Maps",
+    manifestUrl: "https://gitlab.com/ManeaRoliste/manea-maps/-/raw/main/module.json",
+    installedVersion: "0.9.0",
+  };
+  const requestedUrls = [];
+  const fetchImpl = async (url) => {
+    requestedUrls.push(url);
+    if (url === "https://cdn.statically.io/gl/ManeaRoliste/manea-maps@HEAD/module.json") {
+      // Verbatim (trimmed) real response, fetched live 2026-08-16.
+      return okResponse({
+        name: "manea-maps",
+        title: "Manea's Maps",
+        author: "ManeaRoliste",
+        version: "1.0.0",
+        minimumCoreVersion: "0.8.6",
+        compatibleCoreVersion: "9",
+      });
+    }
+    // The declared gitlab.com/-/raw/ URL: genuinely CORS-blocked in a real
+    // browser (confirmed live, no Access-Control-Allow-Origin header).
+    throw new TypeError("Failed to fetch");
+  };
+
+  const result = await fetchPackageManifest(pkg, { fetchImpl });
+
+  assert.deepEqual(requestedUrls, [
+    "https://gitlab.com/ManeaRoliste/manea-maps/-/raw/main/module.json",
+    "https://cdn.statically.io/gl/ManeaRoliste/manea-maps@HEAD/module.json",
+  ]);
+  assert.equal(result.status, "ok");
+  assert.equal(result.provenance, "fallback");
+  // Legacy compatibleCoreVersion, folded into `verified` per REQ "Manifest
+  // Check"'s legacy-field fallback — works identically through the GitLab
+  // mirror as it already does for a declared or GitHub-fallback result.
+  assert.equal(result.verified, "9");
+  // Fallback Field Trust withholds version/updateAvailable regardless of
+  // host — the real committed version (1.0.0) is genuinely newer than the
+  // installed 0.9.0 here, and the system still correctly reports unknown
+  // rather than surfacing that as a trusted "update available" verdict.
+  assert.equal(result.latestVersion, null);
+  assert.equal(result.updateAvailable, null);
+});
+
+// --- fetchPackageManifest: bitbucket.org fallback (ADR-0008 Amendment 3) --
+//
+// Bitbucket's CORS posture turned out more nuanced than GitLab's, discovered
+// live (not assumed) while looking for a real-world positive-proof package:
+//
+// - Bitbucket's `/raw/<branch>/<file>` endpoint (source browsing) DOES send
+//   `Access-Control-Allow-Origin`, but only when the request carries an
+//   `Origin` header — it reflects the origin rather than sending a static
+//   `*`. `curl` sends no `Origin` header by default, which produced a false
+//   "no CORS" reading during initial investigation; `curl -H "Origin: ..."`
+//   (or a real browser, which always sends one) shows the true picture.
+//   Practically: a package declaring a plain `bitbucket.org/.../raw/...`
+//   manifest URL needs NO fallback at all — the declared attempt already
+//   succeeds, the same way `multilevel-tokens` already declares a
+//   `raw.githubusercontent.com` URL directly (ADR-0003).
+// - Bitbucket's "Downloads" feature (uploaded release artifacts, Bitbucket's
+//   rough equivalent of a GitHub release asset) is where the real CORS gap
+//   lives: it 302-redirects to a presigned S3 URL that sends no CORS header
+//   at all, even with Origin present — the exact shape of GitHub's
+//   `releases/latest/download/...` problem (ADR-0003's original trigger).
+//
+// The below therefore mirrors the GitLab fallback tests with synthetic
+// (mocked) fixtures — a real "downloads"-hosted, git-committed Bitbucket
+// Foundry manifest was not found; the one real candidate located
+// (`rpgframework-cloud/shadowrun6-eden`) uses "Downloads" for a file that
+// isn't in the git tree either, so it's a real *negative* case, the same
+// shape as GitLab's pings/settings-extender — covered further down. The
+// real *positive* Bitbucket proof, further below, is the `raw/` case:
+// declared-URL success, needing no fallback at all.
+
+test("fetchPackageManifest falls back to cdn.statically.io when a bitbucket.org Downloads URL fails (synthetic — mirrors the real 302-to-uncors'd-S3 shape)", async () => {
+  const pkg = {
+    id: "bb-mod",
+    title: "Bitbucket Mod",
+    manifestUrl: "https://bitbucket.org/owner/bb-mod/downloads/module.json",
+    installedVersion: "1.0.0",
+  };
+  const requestedUrls = [];
+  const fetchImpl = async (url) => {
+    requestedUrls.push(url);
+    if (url === "https://cdn.statically.io/bb/owner/bb-mod@HEAD/module.json") {
+      return okResponse({ version: "0.9.0", compatibility: { verified: "13" } });
+    }
+    throw new TypeError("Failed to fetch");
+  };
+
+  const result = await fetchPackageManifest(pkg, { fetchImpl });
+
+  assert.deepEqual(requestedUrls, [
+    "https://bitbucket.org/owner/bb-mod/downloads/module.json",
+    "https://cdn.statically.io/bb/owner/bb-mod@HEAD/module.json",
+  ]);
+  assert.equal(result.status, "ok");
+  assert.equal(result.provenance, "fallback");
+  assert.equal(result.latestVersion, null);
+  assert.equal(result.updateAvailable, null);
+  assert.equal(result.verified, "13");
+});
+
+test("fetchPackageManifest: bitbucket.org fallback also fails -> Couldn't check, same outcome as if the fallback didn't exist", async () => {
+  const pkg = {
+    id: "bb-mod",
+    title: "Bitbucket Mod",
+    manifestUrl: "https://bitbucket.org/owner/bb-mod/downloads/module.json",
+    installedVersion: "1.0.0",
+  };
+  const fetchImpl = async (url) => {
+    if (url.includes("cdn.statically.io")) {
+      return { ok: false, status: 404, json: async () => ({}) };
+    }
+    throw new TypeError("Failed to fetch");
+  };
+
+  const result = await fetchPackageManifest(pkg, { fetchImpl });
+
+  assert.equal(result.status, "error");
+  assert.equal(result.provenance, null);
+  assert.ok(result.error.message.includes("cdn.statically.io"));
+});
+
+// Governing: ADR-0008 Amendment 3 — real-world positive proof, but of a
+// different fact than the manea-maps GitLab test above: Bitbucket's `raw/`
+// convention needs no fallback at all. `rpgframework-cloud/shadowrun6-eden`
+// is a genuinely published Bitbucket-hosted Foundry game system (Shadowrun
+// 6); its `raw/master/system.json` file IS committed to the repo root.
+// Verified live in an actual CORS-enforcing browser: the declared
+// bitbucket.org/raw/ URL succeeds directly (Bitbucket reflects
+// Access-Control-Allow-Origin when a real Origin header is sent — see the
+// note above the Downloads-fallback tests), so `fetchPackageManifest` never
+// even reaches the fallback branch. Response content below is this system's
+// real, current manifest (trimmed to the fields this module reads).
+test("fetchPackageManifest: real-world Bitbucket system (shadowrun6-eden) resolves directly via its declared raw/ URL — no fallback needed", async () => {
+  const pkg = {
+    id: "shadowrun6-eden",
+    title: "Shadowrun 6",
+    isSystem: true,
+    manifestUrl: "https://bitbucket.org/rpgframework-cloud/shadowrun6-eden/raw/master/system.json",
+    installedVersion: "0.0.1",
+  };
+  const requestedUrls = [];
+  const fetchImpl = async (url) => {
+    requestedUrls.push(url);
+    // Verbatim (trimmed) real response, fetched live 2026-08-16 — the
+    // declared URL itself, not a fallback.
+    return okResponse({
+      id: "shadowrun6-eden",
+      title: "Shadowrun 6",
+      version: "0.0.1",
+      compatibility: { minimum: 10, verified: "11", maximum: 11 },
+      compatibleCoreVersion: null,
+    });
+  };
+
+  const result = await fetchPackageManifest(pkg, { fetchImpl });
+
+  assert.deepEqual(requestedUrls, [
+    "https://bitbucket.org/rpgframework-cloud/shadowrun6-eden/raw/master/system.json",
+  ]);
+  assert.equal(result.status, "ok");
+  assert.equal(result.provenance, "declared");
+  assert.equal(result.verified, "11");
+  // Declared-sourced data is fully trusted, unlike a fallback result.
+  assert.equal(result.latestVersion, "0.0.1");
+  assert.equal(result.updateAvailable, false);
+});
+
+// Governing: ADR-0008 Amendment 3 — real-world *negative* case, the
+// Bitbucket equivalent of GitLab's pings/settings-extender: a real package
+// (this same repo) whose Downloads-hosted manifest variant is not committed
+// to git source at all, so neither the declared URL nor the
+// cdn.statically.io fallback can find it. Confirmed live: both the origin's
+// own raw path and the statically.io mirror 404 for this exact file.
+test("fetchPackageManifest: real-world Bitbucket Downloads file not committed to git source -> Couldn't check on both attempts (shadowrun6-eden's staging manifest)", async () => {
+  const pkg = {
+    id: "shadowrun6-eden-staging",
+    title: "Shadowrun 6 (staging)",
+    isSystem: true,
+    manifestUrl:
+      "https://bitbucket.org/rpgframework-cloud/shadowrun6-eden/downloads/system-staging.json",
+    installedVersion: "0.0.1",
+  };
+  const fetchImpl = async () => ({ ok: false, status: 404, json: async () => ({}) });
+
+  const result = await fetchPackageManifest(pkg, { fetchImpl });
+
+  assert.equal(result.status, "error");
+  assert.equal(result.provenance, null);
 });
 
 test("fetchPackageManifest treats a fallback 404 as terminal (manifest not at repo root)", async () => {
@@ -788,6 +1021,30 @@ test("fetchPackageManifest: a gitlab.com-hosted package never spends the shared 
 
   assert.ok(requestedUrls.every((url) => !url.includes("api.github.com")));
   assert.equal(budget.remaining, 5, "budget must be untouched by a gitlab.com-hosted package");
+  assert.equal(result.provenance, "fallback");
+});
+
+test("fetchPackageManifest: a bitbucket.org-hosted package also never spends the shared GitHub API budget (ADR-0008 Amendment 3 regression guard)", async () => {
+  const pkg = {
+    id: "bb-mod",
+    title: "Bitbucket Mod",
+    manifestUrl: "https://bitbucket.org/owner/bb-mod/raw/master/module.json",
+    installedVersion: "1.0.0",
+  };
+  const requestedUrls = [];
+  const fetchImpl = async (url) => {
+    requestedUrls.push(url);
+    if (url.includes("cdn.statically.io")) {
+      return okResponse({ version: "0.9.0", compatibility: { verified: "13" } });
+    }
+    throw new TypeError("Failed to fetch");
+  };
+  const budget = { remaining: 5 };
+
+  const result = await fetchPackageManifest(pkg, { fetchImpl, githubApiBudget: budget });
+
+  assert.ok(requestedUrls.every((url) => !url.includes("api.github.com")));
+  assert.equal(budget.remaining, 5, "budget must be untouched by a bitbucket.org-hosted package");
   assert.equal(result.provenance, "fallback");
 });
 
