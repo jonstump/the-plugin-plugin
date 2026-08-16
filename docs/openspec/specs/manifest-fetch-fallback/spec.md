@@ -30,6 +30,13 @@ released tag, the data it produces is **not** equivalent to the data the
 declared URL would have returned. Distinguishing the two is a requirement
 of this spec, not an implementation nicety — see REQ "Result Provenance".
 
+This spec uses "comparison target" and `inferredLatest` per SPEC-0001's
+Overview terminology note: `inferredLatest` is specifically the
+peer-inferred value, and is the comparison target only when no
+authoritative target (`game.data.coreUpdate`) is available. REQ "Inferred
+Latest Participation" below concerns fallback-sourced data feeding that
+specific peer-inference computation — not the comparison target generally.
+
 ## Requirements
 
 ### Requirement: Fallback Trigger and Ordering

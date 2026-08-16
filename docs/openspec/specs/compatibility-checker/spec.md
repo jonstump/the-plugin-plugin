@@ -21,6 +21,16 @@ version gap becomes severity without over-alarming on ordinary manifest
 staleness) and ADR-0004 (how "possibly unmaintained" is evidenced by
 repository activity rather than by repeated observation).
 
+**Terminology.** "Comparison target" denotes whichever value is actually
+in force for a given check — authoritative (from `game.data.coreUpdate`)
+or peer-inferred — and is what REQ "Target Version Determination"
+produces. `inferredLatest` denotes specifically the peer-inferred value
+computed by REQ "Inferred Latest Version"; it is the comparison target
+only on the fallback path, when no authoritative target is available. The
+two are not interchangeable: a requirement that names `inferredLatest`
+means the peer-inference computation specifically, not "the comparison
+target" generally.
+
 ## Requirements
 
 ### Requirement: Manifest Check
@@ -156,8 +166,9 @@ equivalent evidence to a declared `compatibility.maximum` ceiling.
 
 - **Hard severity**: the system MUST classify a package as hard-severity
   when its fetched manifest declares `compatibility.maximum` and that
-  value is below the comparison target (`game.release` or
-  `inferredLatest`).
+  value is below the comparison target — `game.release`, or the active
+  comparison target from REQ "Target Version Determination" (authoritative
+  when available, `inferredLatest` on the fallback path).
 - **Soft severity**: the system MUST classify a package as soft-severity
   when its `compatibility.verified` trails the comparison target but
   `compatibility.maximum` is absent or still at or above the comparison
