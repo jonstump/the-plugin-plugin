@@ -23,16 +23,38 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
+// Governing: ADR-0001 (amended 2026-08-15), SPEC-0001 REQ "Target Version
+// Determination", SPEC-0001 REQ "Inferred Latest Version" — issue #37. The
+// `render` hook below is a mutable outer binding (`onNextRender`) rather
+// than baked into a fresh stub per test, because `CheckerTableApp extends
+// HandlebarsApplicationMixin(ApplicationV2)` resolves `foundry.applications.api`
+// at class-definition time, i.e. on this file's *first* dynamic `import()`
+// below — reassigning `globalThis.foundry` afterwards would not reach the
+// already-defined class. `onNextRender` lets later tests (issue #37,
+// "Comparison target view-model mapping" section) observe when
+// `CheckerTableApp#render` fires without needing to redefine the stub.
+let onNextRender = null;
+
 globalThis.foundry = {
   applications: {
     api: {
-      ApplicationV2: class {},
+      ApplicationV2: class {
+        // Minimal stand-in for ApplicationV2's own context-prep step,
+        // which `CheckerTableApp#_prepareContext` extends via `super`.
+        async _prepareContext() {
+          return {};
+        }
+        render(...args) {
+          onNextRender?.();
+          return this;
+        }
+      },
       HandlebarsApplicationMixin: (Base) => class extends Base {},
     },
   },
 };
 
-const { openCheckerTable } = await import("../scripts/checker-table.js");
+const { openCheckerTable, CheckerTableApp } = await import("../scripts/checker-table.js");
 
 test("openCheckerTable: resolves to null for a non-GM user", async () => {
   globalThis.game = { user: { isGM: false } };
@@ -58,4 +80,172 @@ test("openCheckerTable: resolves to null and does not throw when game itself is 
   delete globalThis.game;
   await assert.doesNotReject(() => openCheckerTable());
   assert.equal(await openCheckerTable(), null);
+});
+
+// ---------------------------------------------------------------------------
+// Comparison target view-model mapping (issue #37, companion to issue #36).
+//
+// `#buildComparisonTargetContext` (scripts/checker-table.js) is a private
+// (`#`) method, so it cannot be invoked directly by name from this file. It
+// is exercised here through `CheckerTableApp`'s actual public rendering
+// entry point, `_prepareContext`, the same way a real render cycle would
+// reach it — not by reimplementing or reaching around the private method.
+//
+// `_prepareContext` kicks off an unawaited scan (`#startScan`) the first
+// time it's called on a fresh instance, so its *first* call always observes
+// `comparisonTarget: null` (the "unknown/no target yet" state — see the
+// dedicated test below) before that scan has had a chance to resolve. A
+// *second* call, made after the scan settles, observes whatever
+// `comparisonTarget` state the scan produced. `runComparisonTargetScenario`
+// below drives exactly that two-call sequence, using the `onNextRender` hook
+// (declared at the top of this file) to detect when the scan's
+// fire-and-forget `this.render()` fires, i.e. when it's safe to call
+// `_prepareContext` again.
+//
+// Every scenario's `game.modules` is either empty or (for the "inferred,
+// peer signal present" scenario) backed by a stubbed `globalThis.fetch` —
+// never a real network request — matching the "no browser test runner, keep
+// assertions on pure logic / compiled output" guidance for this issue.
+//
+// Governing: ADR-0001 (amended 2026-08-15), SPEC-0001 REQ "Target Version
+// Determination", SPEC-0001 REQ "Inferred Latest Version".
+
+/**
+ * @param {(game: object) => void} configureGame - mutates the default
+ *   `game` stub (release/coreUpdate/modules/etc.) for one scenario.
+ * @returns {Promise<{firstContext: object, secondContext: object}>}
+ *   `firstContext` is always pre-scan (`comparisonTarget: null`);
+ *   `secondContext` is captured once the scan has resolved.
+ */
+async function runComparisonTargetScenario(configureGame) {
+  let resolveRendered;
+  const rendered = new Promise((resolve) => {
+    resolveRendered = resolve;
+  });
+  onNextRender = resolveRendered;
+
+  globalThis.game = {
+    user: { isGM: true },
+    release: { generation: "13", version: "13.351", build: 351 },
+    modules: [],
+    data: {},
+    settings: { get: () => undefined, set: async () => {} },
+    i18n: {
+      localize: (key) => key,
+      // Test-only stand-in for Foundry's `format` — echoes the key and JSON
+      // -serializes the interpolation data so assertions can check both
+      // "which key was used" and "which version was interpolated" without
+      // needing the real translated strings from languages/en.json (already
+      // covered by the localization tests in test/language-strings.test.js).
+      format: (key, data) => `${key}|${JSON.stringify(data ?? {})}`,
+    },
+  };
+  configureGame(globalThis.game);
+
+  const originalFetch = globalThis.fetch;
+  try {
+    const instance = new CheckerTableApp();
+
+    const firstContext = await instance._prepareContext({});
+    await rendered;
+    const secondContext = await instance._prepareContext({});
+
+    return { firstContext, secondContext };
+  } finally {
+    globalThis.fetch = originalFetch;
+    onNextRender = null;
+    delete globalThis.game;
+  }
+}
+
+test("comparisonTarget: null (unknown/no target yet) before the first scan has resolved", async () => {
+  const { firstContext } = await runComparisonTargetScenario((game) => {
+    // No coreUpdate, no modules — irrelevant to this assertion; only the
+    // pre-scan snapshot is checked.
+  });
+  assert.equal(firstContext.comparisonTarget, null);
+});
+
+test("comparisonTarget: authoritative + newer generation available maps to the 'confirmed' view-model", async () => {
+  const { secondContext } = await runComparisonTargetScenario((game) => {
+    game.data.coreUpdate = { couldReachWebsite: true, version: "14.366" };
+    game.release = { generation: "13", version: "13.351", build: 351 };
+  });
+  assert.deepEqual(secondContext.comparisonTarget.statusClass, "confirmed");
+  assert.deepEqual(secondContext.comparisonTarget.iconClass, "fa-circle-check");
+  assert.ok(
+    secondContext.comparisonTarget.note.startsWith(
+      "THE-PLUGIN-PLUGIN.CheckerTable.TargetConfirmedNewer"
+    )
+  );
+  assert.ok(secondContext.comparisonTarget.note.includes("14.366"));
+});
+
+test("comparisonTarget: authoritative + already current maps to the 'confirmed' view-model with different wording", async () => {
+  const { secondContext } = await runComparisonTargetScenario((game) => {
+    game.data.coreUpdate = { couldReachWebsite: true, version: "13.351" };
+    game.release = { generation: "13", version: "13.351", build: 351 };
+  });
+  assert.deepEqual(secondContext.comparisonTarget.statusClass, "confirmed");
+  assert.deepEqual(secondContext.comparisonTarget.iconClass, "fa-circle-check");
+  assert.ok(
+    secondContext.comparisonTarget.note.startsWith(
+      "THE-PLUGIN-PLUGIN.CheckerTable.TargetConfirmedCurrent"
+    )
+  );
+  // Different key from the "newer" scenario above — an inference is never
+  // presented with the same wording as a confirmed-current state, and vice
+  // versa.
+  assert.ok(
+    !secondContext.comparisonTarget.note.startsWith(
+      "THE-PLUGIN-PLUGIN.CheckerTable.TargetConfirmedNewer"
+    )
+  );
+});
+
+test("comparisonTarget: inferred with peer signal maps to the 'inferred' view-model, distinct from 'confirmed'", async () => {
+  const { secondContext } = await runComparisonTargetScenario((game) => {
+    // No game.data.coreUpdate at all — falls through to peer inference.
+    game.modules = [
+      {
+        id: "peer-pkg",
+        title: "Peer Package",
+        active: true,
+        version: "1.0.0",
+        manifest: "https://example.com/peer/module.json",
+      },
+    ];
+    globalThis.fetch = async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ version: "1.1.0", compatibility: { verified: "14" } }),
+    });
+  });
+  assert.deepEqual(secondContext.comparisonTarget.statusClass, "inferred");
+  assert.deepEqual(secondContext.comparisonTarget.iconClass, "fa-circle-question");
+  assert.ok(
+    secondContext.comparisonTarget.note.startsWith(
+      "THE-PLUGIN-PLUGIN.CheckerTable.TargetInferred"
+    )
+  );
+  assert.ok(secondContext.comparisonTarget.note.includes("14"));
+  // Never the "confirmed" classes/wording — an inference must not be
+  // presented as Foundry-confirmed fact.
+  assert.notEqual(secondContext.comparisonTarget.statusClass, "confirmed");
+  assert.notEqual(secondContext.comparisonTarget.iconClass, "fa-circle-check");
+});
+
+test("comparisonTarget: inferred with no peer evidence maps to the 'inferred' view-model with the no-evidence wording", async () => {
+  const { secondContext } = await runComparisonTargetScenario((game) => {
+    // No coreUpdate, no modules at all — nothing to infer from.
+    game.modules = [];
+  });
+  assert.deepEqual(secondContext.comparisonTarget.statusClass, "inferred");
+  assert.deepEqual(secondContext.comparisonTarget.iconClass, "fa-circle-question");
+  // TargetNoEvidence has no {version} placeholder, so it's localized rather
+  // than formatted — the note is the bare key, unlike every other branch.
+  assert.equal(
+    secondContext.comparisonTarget.note,
+    "THE-PLUGIN-PLUGIN.CheckerTable.TargetNoEvidence"
+  );
 });
