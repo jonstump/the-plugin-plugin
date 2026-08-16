@@ -293,6 +293,105 @@ export function deriveFallbackUrl(declaredUrl) {
 }
 
 /**
+ * Parses a github.com-hosted declared manifest URL into
+ * `{ owner, repo, filename }`. Returns null for anything else (unparseable
+ * URL, non-github.com host, fewer than `<owner>/<repo>/<filename>`
+ * segments) — the same shape `deriveFallbackUrl` recognizes, kept as a
+ * separate small function rather than changing `deriveFallbackUrl` itself
+ * (which has its own direct tests and is used elsewhere unchanged). Used
+ * only by the release-tag-resolution path below.
+ *
+ * Governing: ADR-0003 Amendment 2, SPEC-0002 REQ "Release Tag Resolution".
+ */
+function parseGithubManifestUrl(declaredUrl) {
+  if (!declaredUrl) return null;
+
+  let parsed;
+  try {
+    parsed = new URL(declaredUrl);
+  } catch {
+    return null;
+  }
+
+  if (parsed.hostname.toLowerCase() !== "github.com") return null;
+
+  const segments = parsed.pathname.split("/").filter(Boolean);
+  if (segments.length < 3) return null;
+
+  const [owner, repo] = segments;
+  const filename = segments[segments.length - 1];
+  if (!owner || !repo || !filename) return null;
+
+  return { owner, repo, filename };
+}
+
+/**
+ * Resolves a GitHub repo's latest published release tag via the
+ * unauthenticated GitHub API, never throwing — every failure mode (network
+ * error, non-200, malformed JSON, missing `tag_name`) resolves to
+ * `{ ok: false, reason }`. Mirrors the error-handling style of
+ * `checkGithubArchived` in compatibility-classifier.js (try/catch around the
+ * fetch, check `response.ok`, try/catch around `.json()`).
+ *
+ * Governing: ADR-0003 Amendment 2, SPEC-0002 REQ "Release Tag Resolution".
+ */
+async function resolveGithubReleaseTag({ owner, repo }, fetchImpl, signal) {
+  let response;
+  try {
+    response = await fetchImpl(
+      `https://api.github.com/repos/${owner}/${repo}/releases/latest`,
+      { signal, headers: { Accept: "application/vnd.github+json" } }
+    );
+  } catch (err) {
+    return { ok: false, reason: err?.message ?? String(err) };
+  }
+
+  if (!response.ok) {
+    return { ok: false, reason: `github-api-status-${response.status}` };
+  }
+
+  let data;
+  try {
+    data = await response.json();
+  } catch (err) {
+    return {
+      ok: false,
+      reason: `github-api-response-not-json: ${err?.message ?? err}`,
+    };
+  }
+
+  if (!data?.tag_name) {
+    return { ok: false, reason: "no-tag-name-in-response" };
+  }
+
+  return { ok: true, tagName: data.tag_name };
+}
+
+// Governing: ADR-0003 Amendment 2, SPEC-0002 REQ "Fallback Scope and
+// Limits" (revised) — the GitHub API budget is shared, local, and
+// best-effort: one counter created per `classifyActiveCompatibility` call
+// and spent by both release-tag resolution (here) and the possibly-
+// unmaintained heuristic's archived-repo check
+// (`compatibility-classifier.js`). Neither consumer may spend it
+// independently of the other.
+export const DEFAULT_GITHUB_API_BUDGET = 50;
+
+/**
+ * Returns true and decrements `budget.remaining` if a GitHub API call may
+ * proceed; returns false (budget left unchanged) once exhausted. Callers are
+ * responsible for checking whether a budget object exists at all before
+ * calling this — a null/undefined budget means "no shared tracking
+ * requested," handled by the caller's own `if` check, not by this function.
+ *
+ * Governing: ADR-0003 Amendment 2, SPEC-0002 REQ "Release Tag Resolution".
+ */
+export function consumeGithubApiBudget(budget) {
+  if (budget.remaining <= 0) return false;
+  budget.remaining -= 1;
+  return true;
+}
+
+/**
  * Fetches and parses a single package's manifest, never throwing — every
  * failure mode (missing URL, network error, non-200, malformed JSON, abort)
  * resolves to an error result attributed to this package.
@@ -307,9 +406,21 @@ export function deriveFallbackUrl(declaredUrl) {
  * Scope and Limits"). Both attempts run inside this single function call, so
  * they share whichever concurrency slot / cancellation signal the caller
  * (`checkPackages`) is already managing — no pool changes needed.
+ *
+ * Governing: ADR-0003 Amendment 2, SPEC-0002 REQ "Release Tag Resolution" —
+ * before the raw/HEAD fallback, and only when the caller supplied a shared
+ * `options.githubApiBudget` with remaining capacity, attempt to resolve the
+ * repo's actual latest release tag and fetch the manifest AT that tag
+ * (genuinely trustworthy data, provenance `"release"`). Any failure at any
+ * step of that attempt — API call fails, no releases published, the
+ * tag-resolved fetch itself fails — falls through silently to the existing
+ * raw/HEAD fallback below; no separate error is ever surfaced for it. This
+ * is opt-in: when no `githubApiBudget` is supplied at all, this whole block
+ * is skipped and behavior is identical to before this feature (every
+ * existing caller/test that doesn't pass the option is unaffected).
  */
 export async function fetchPackageManifest(pkg, options = {}) {
-  const { fetchImpl = fetch, signal } = options;
+  const { fetchImpl = fetch, signal, githubApiBudget } = options;
 
   if (!pkg.manifestUrl) {
     return errorResult(pkg, "No manifest URL declared for this package");
@@ -342,6 +453,30 @@ export async function fetchPackageManifest(pkg, options = {}) {
       pkg,
       `Declared manifest URL failed: ${declaredAttempt.message}`
     );
+  }
+
+  if (githubApiBudget && consumeGithubApiBudget(githubApiBudget)) {
+    const parsedGithub = parseGithubManifestUrl(pkg.manifestUrl);
+    if (parsedGithub) {
+      const tagResolution = await resolveGithubReleaseTag(
+        parsedGithub,
+        fetchImpl,
+        signal
+      );
+      if (tagResolution.ok) {
+        const releaseUrl =
+          `https://raw.githubusercontent.com/${parsedGithub.owner}/` +
+          `${parsedGithub.repo}/${tagResolution.tagName}/${parsedGithub.filename}`;
+        const releaseAttempt = await attemptManifestFetch(
+          releaseUrl,
+          fetchImpl,
+          signal
+        );
+        if (releaseAttempt.ok) {
+          return buildOkResult(pkg, releaseAttempt.manifest, "release");
+        }
+      }
+    }
   }
 
   const fallbackAttempt = await attemptManifestFetch(
@@ -380,6 +515,12 @@ export async function checkPackages(packages, options = {}) {
     cache = sessionCache,
     signal,
     forceRefresh = false,
+    // Governing: ADR-0003 Amendment 2, SPEC-0002 REQ "Release Tag
+    // Resolution" — must be explicitly threaded through to
+    // `fetchPackageManifest` below, since that call only forwards a
+    // hand-picked subset of `options` rather than spreading the whole
+    // object. Left undefined (opt-in) when the caller doesn't supply one.
+    githubApiBudget,
   } = options;
 
   const results = new Array(packages.length);
@@ -396,7 +537,11 @@ export async function checkPackages(packages, options = {}) {
   await runWithConcurrency(
     pending,
     async ({ pkg, index }) => {
-      const result = await fetchPackageManifest(pkg, { fetchImpl, signal });
+      const result = await fetchPackageManifest(pkg, {
+        fetchImpl,
+        signal,
+        githubApiBudget,
+      });
       if (signal?.aborted) return; // don't cache a cancelled/partial result
       cache.set(pkg.id, result);
       results[index] = result;

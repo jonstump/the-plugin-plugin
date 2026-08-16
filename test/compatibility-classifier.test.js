@@ -19,6 +19,7 @@ import {
   isDormant,
   applyPossiblyUnmaintainedHeuristic,
   classifyCompatibility,
+  classifyActiveCompatibility,
 } from "../scripts/compatibility-classifier.js";
 
 function okPkg(overrides = {}) {
@@ -590,6 +591,66 @@ test("possibly-unmaintained: GitHub API is only queried for packages already fai
   assert.deepEqual(calledWith, ["failing-repo"]);
 });
 
+// Governing: ADR-0003 Amendment 2, SPEC-0002 REQ "Fallback Scope and
+// Limits" (revised) — this heuristic's GitHub API calls now share a
+// scan-scoped rate-limit budget with release-tag resolution
+// (manifest-fetcher.js). When the shared budget runs out partway through
+// multiple candidates, later candidates degrade to "unknown" instead of
+// making a real call.
+test("possibly-unmaintained: a shared githubApiBudget that runs out partway through leaves later candidates unknown, not queried", async () => {
+  const candidates = ["a", "b", "c", "d"].map((id) =>
+    failingPkg(id, {
+      links: { url: `https://github.com/foo/${id}-repo`, bugs: null, changelog: null },
+    })
+  );
+
+  const calledWith = [];
+  const githubCheck = async (repo) => {
+    calledWith.push(repo.repo);
+    return { archived: false, pushedAt: "2026-07-01T00:00:00Z", reason: null };
+  };
+  const budget = { remaining: 2 };
+
+  const results = await applyPossiblyUnmaintainedHeuristic(candidates, {
+    githubCheck,
+    now: NOW,
+    githubApiBudget: budget,
+    concurrency: 1, // deterministic ordering for this assertion
+  });
+
+  assert.equal(calledWith.length, 2, "only 2 of 4 candidates should have actually been queried");
+  assert.equal(budget.remaining, 0);
+
+  const queried = results.filter((r) => calledWith.includes(`${r.id}-repo`));
+  const skipped = results.filter((r) => !calledWith.includes(`${r.id}-repo`));
+  assert.equal(queried.length, 2);
+  assert.equal(skipped.length, 2);
+  for (const pkg of skipped) {
+    assert.equal(pkg.githubArchived, null, `${pkg.id} should be unknown, not queried`);
+    assert.equal(pkg.repoDormant, null);
+    // Governing: CLAUDE.md rule 1 — budget exhaustion degrades to "unknown",
+    // never treated as evidence toward "possibly unmaintained".
+    assert.equal(pkg.possiblyUnmaintained, false);
+  }
+});
+
+test("possibly-unmaintained: without a githubApiBudget option, every eligible candidate is still queried unconditionally (default behavior unchanged)", async () => {
+  const candidates = ["a", "b", "c"].map((id) =>
+    failingPkg(id, {
+      links: { url: `https://github.com/foo/${id}-repo`, bugs: null, changelog: null },
+    })
+  );
+  let calls = 0;
+  const githubCheck = async () => {
+    calls++;
+    return { archived: false, pushedAt: "2026-07-01T00:00:00Z", reason: null };
+  };
+
+  await applyPossiblyUnmaintainedHeuristic(candidates, { githubCheck, now: NOW });
+
+  assert.equal(calls, 3);
+});
+
 // Governing: SPEC-0001 REQ "Possibly Unmaintained Heuristic" Scenario:
 // Package not hosted on GitHub.
 test("possibly-unmaintained: no GitHub link -> not flagged (unknown, not evidence)", async () => {
@@ -637,3 +698,125 @@ test("classifyCompatibility ties inferredLatest, severity, and possiblyUnmaintai
   assert.equal(leader.severity, null);
   assert.equal(leader.possiblyUnmaintained, false);
 });
+
+// --- classifyActiveCompatibility: shared GitHub API rate-limit budget -----
+//
+// Governing: ADR-0003 Amendment 2, SPEC-0002 REQ "Release Tag Resolution",
+// SPEC-0002 REQ "Fallback Scope and Limits" (revised) — proves the
+// cross-file sharing actually works: release-tag resolution
+// (manifest-fetcher.js, run during the fetch pass) and the possibly-
+// unmaintained heuristic's archived-repo check (this file, run during
+// classification) must draw from the SAME counter within one
+// `classifyActiveCompatibility` call, not each get an independent budget of
+// their own.
+test("classifyActiveCompatibility: release-tag resolution and the possibly-unmaintained heuristic draw from one shared rate-limit budget", async () => {
+  const budgetTotal = 3;
+
+  // 5 packages, each: declared URL always fails; fallback is github.com
+  // hosted (eligible for tag resolution); the raw/HEAD fallback manifest's
+  // compatibility.verified ("10") is old enough to also fail the verified
+  // check against game.release ("13"), making every package a candidate for
+  // BOTH consumers. Without real sharing, 5 tag-resolution attempts (each
+  // capped by its own budget) plus 5 archived-repo checks (each capped by
+  // its own budget) could draw up to 2x the nominal budget; with a truly
+  // shared counter, total api.github.com calls across both concerns can
+  // never exceed budgetTotal.
+  const packages = Array.from({ length: 5 }, (_, i) => ({
+    id: `pkg-${i}`,
+    title: `Pkg ${i}`,
+    active: true,
+    version: "1.0.0",
+    manifest: `https://github.com/owner/pkg-${i}/releases/latest/download/module.json`,
+  }));
+
+  const githubApiUrls = [];
+  const fetchImpl = async (url) => {
+    if (url.includes("api.github.com/repos/owner/pkg-")) {
+      githubApiUrls.push(url);
+      // Every api.github.com call fails (no releases published / archived
+      // lookup fails) — this isolates the test to counting *attempts*, not
+      // depending on success/failure outcomes.
+      return { ok: false, status: 404, json: async () => ({}) };
+    }
+    if (url.includes("raw.githubusercontent.com")) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ version: "0.1.0", compatibility: { verified: "10" } }),
+      };
+    }
+    // Declared manifest URL — always fails, forcing the fallback path.
+    throw new TypeError("Failed to fetch");
+  };
+
+  const game = {
+    modules: packages,
+    system: null,
+    release: { generation: "13", version: "13.351" },
+    data: { coreUpdate: null },
+  };
+
+  const { packages: classified } = await classifyActiveCompatibility({
+    game,
+    fetchImpl,
+    githubApiBudget: { remaining: budgetTotal },
+    concurrency: 6,
+    cache: new Map(), // isolate from the module-level session cache
+  });
+
+  assert.equal(classified.length, 5);
+  assert.ok(
+    githubApiUrls.length <= budgetTotal,
+    `expected at most ${budgetTotal} total api.github.com calls across both consumers, got ${githubApiUrls.length}`
+  );
+  // The budget was genuinely exercised down to zero, not merely unused —
+  // proves the counter is actually shared rather than each consumer having
+  // silently skipped its own calls for unrelated reasons.
+  assert.equal(githubApiUrls.length, budgetTotal);
+});
+
+test("classifyActiveCompatibility: a fresh default budget is created automatically when none is supplied (production call path)", async () => {
+  const packages = [
+    {
+      id: "pkg-0",
+      title: "Pkg 0",
+      active: true,
+      version: "1.0.0",
+      manifest: "https://github.com/owner/pkg-0/releases/latest/download/module.json",
+    },
+  ];
+
+  const githubApiUrls = [];
+  const fetchImpl = async (url) => {
+    if (url.includes("api.github.com")) {
+      githubApiUrls.push(url);
+      return okResponse({ tag_name: "2.0.0" });
+    }
+    if (url === "https://raw.githubusercontent.com/owner/pkg-0/2.0.0/module.json") {
+      return okResponse({ version: "2.0.0", compatibility: { verified: "14" } });
+    }
+    throw new TypeError("Failed to fetch");
+  };
+
+  const game = {
+    modules: packages,
+    system: null,
+    release: { generation: "13", version: "13.351" },
+    data: { coreUpdate: null },
+  };
+
+  const { packages: classified } = await classifyActiveCompatibility({
+    game,
+    fetchImpl,
+    cache: new Map(), // isolate from the module-level session cache
+  });
+
+  // No githubApiBudget was passed in, yet release-tag resolution still ran
+  // (a default budget must have been created internally) and succeeded.
+  assert.ok(githubApiUrls.length >= 1);
+  assert.equal(classified[0].provenance, "release");
+});
+
+function okResponse(body) {
+  return { ok: true, status: 200, json: async () => body };
+}
