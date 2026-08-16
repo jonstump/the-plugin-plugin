@@ -10,11 +10,17 @@ This module closes that gap.
 
 1. **Be kind to module developers.** They are volunteers. No user-facing
    language may call a module "dead", "broken", or "abandoned" — use
-   "possibly unmaintained", "not yet verified", "couldn't check". The UI must
-   include a visible reminder that developers are volunteers with their own
-   lives, and that a module not being updated yet doesn't mean it never will
-   be. This rule applies to UI strings, README, notifications, and generated
-   bug-report templates.
+   "possibly unmaintained", "not yet verified", "couldn't check", and never
+   imply a developer is at fault. This half of the rule applies everywhere:
+   UI strings, README, notifications, and generated bug-report templates.
+
+   Additionally, a **visible reminder** that developers are volunteers with
+   their own lives — and that a module not being updated yet doesn't mean it
+   never will be — must appear in the **checker window** and the **README**.
+   Amended 2026-08-16: this reminder is deliberately *not* required in the
+   login notification. A reminder shown where a GM acts on the information
+   carries weight; one repeated on every login becomes furniture. See
+   SPEC-0001 REQ "Login Notification".
 2. **KISS.** Prefer the boring solution. No abstraction until the third use.
    No dependencies without justification.
 3. **Never commit to main.** All work on feature branches, merged via PR.

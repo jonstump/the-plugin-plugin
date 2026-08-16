@@ -330,6 +330,70 @@ The system SHALL notify GMs on `ready` with a summary of checker results.
   results changed." The system MUST determine "changed" by comparing a
   hash of the current results against a hash stored in a world setting.
 
+The chat summary's **content** is further constrained as follows. Its job
+is to let a GM decide whether anything needs their attention without
+opening the checker, and to tell them what upgrade the results are measured
+against.
+
+- The chat summary MUST present its per-status counts as a structured list
+  rather than a single prose sentence.
+- The chat summary MUST state the running Foundry version and the active
+  comparison target, and MUST identify whether that target is authoritative
+  or inferred (see REQ "Target Version Determination"). When no target
+  beyond the running version is available, it MUST say so rather than
+  omitting the line.
+- The chat summary MUST name each **pinned** module whose status is not
+  "Up to date & verified", together with that module's status. Pinned
+  modules with a clean status MUST NOT be named. When no module is pinned,
+  the summary MUST omit this section entirely rather than rendering an
+  empty one.
+- Naming a pinned module in that section MUST NOT change any count in the
+  per-status list, and MUST NOT affect toast gating. In particular a
+  soft-severity pinned module MAY be named there while still being excluded
+  from the "problem" figures and from the toast, per REQ "Compatibility
+  Severity Classification".
+- The chat summary is NOT required to repeat the volunteer reminder that
+  REQ "Checker Table" mandates for the checker window. The reminder belongs
+  where a GM acts on the information; repeating it on every login dilutes
+  it. Every other constraint of CLAUDE.md project rule 1 continues to bind
+  the notification — in particular, no wording may imply a package is dead,
+  broken, or abandoned, or that a developer is at fault.
+
+#### Scenario: Per-status counts are itemised
+
+- **WHEN** the system posts a chat summary
+- **THEN** the per-status counts appear as a structured list rather than as
+  one prose sentence
+
+#### Scenario: Version context with an authoritative target
+
+- **WHEN** the comparison target came from `game.data.coreUpdate`
+- **THEN** the chat summary states the running Foundry version and that
+  target, identified as confirmed rather than inferred
+
+#### Scenario: Version context with no target beyond the running version
+
+- **WHEN** no authoritative target is available and peer inference yields
+  no signal
+- **THEN** the chat summary says no newer Foundry version is evidenced,
+  rather than omitting the version line
+
+#### Scenario: Pinned module needing attention is named
+
+- **WHEN** a pinned module's status is not "Up to date & verified"
+- **THEN** the chat summary names that module and its status
+
+#### Scenario: Pinned module that is clean
+
+- **WHEN** every pinned module's status is "Up to date & verified"
+- **THEN** the chat summary names no pinned modules
+
+#### Scenario: Soft-severity pinned module is named but not escalated
+
+- **WHEN** a pinned module's only issue is soft-severity
+- **THEN** the chat summary names it, the "problem" counts exclude it, and
+  no `ui.notifications.warn` toast is shown
+
 #### Scenario: Pinned module with hard-severity status
 
 - **WHEN** a pinned module has a hard-severity compatibility status
