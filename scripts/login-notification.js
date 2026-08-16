@@ -14,6 +14,11 @@
  */
 
 import { classifyActiveCompatibility } from "./compatibility-classifier.js";
+import {
+  STATUS_LABEL_KEYS,
+  STATUS_LABEL_I18N_KEYS,
+  deriveStatusLabelKey,
+} from "./checker-table-logic.js";
 
 const MODULE_ID = "the-plugin-plugin";
 
@@ -69,9 +74,46 @@ export function stableStringify(value) {
  * what this hash includes, so a soft-only change can cause a new *chat*
  * message under "only when changed" without ever triggering a toast.
  *
+ * Issue #51 extends this same standard to the two new pieces of content the
+ * chat summary now reports:
+ *
+ * - `pinnedModuleIds` — the pinned-module callout names a module by its
+ *   pinned-and-not-clean status, so *which ids are pinned* changes what the
+ *   summary renders even when every package's own classification is
+ *   byte-for-byte identical to last login (e.g. a GM pins a module that
+ *   already had a soft-severity status: no package field changes, but the
+ *   summary now names it where it didn't before). Left out, "only when
+ *   changed" would go stale exactly the way it already would have for
+ *   package fields, per the reasoning above — so it's included, sorted for
+ *   order-independence the same way `packages` is.
+ * - `comparisonTarget` — the version-context line's wording (confirmed vs.
+ *   inferred, "newer available" vs. "already current") is driven by
+ *   `comparisonTarget.source`/`isNewer`/`hasPeerSignal`/`rawVersion`, which
+ *   can change independently of any package's own `severity` field. The
+ *   clearest case: a peer-inferred target becomes authoritative (Foundry's
+ *   own update service starts reporting the same version a package had
+ *   already suggested) — `comparisonTarget.value` is unchanged, so no
+ *   package's severity classification moves, but the summary's confidence
+ *   wording (inferred -> confirmed) does. That's a real content change the
+ *   hash must catch, so the whole object is included (stableStringify
+ *   handles the nested shape already).
+ *
+ * `runningVersion` (`game.release.version`) is deliberately NOT included:
+ * it's read fresh by `runLoginNotification` on every call from the *live*
+ * `game` global, and a running-version change only happens via a world
+ * restart onto a new core build — which is itself a `ready` hook firing
+ * fresh, not a hash lookup racing a stale cached value. Any resulting shift
+ * in package severities already flows through the `packages` shape above.
+ *
  * Governing: SPEC-0001 REQ "Login Notification".
+ *
+ * @param {Array} packages - classified packages
+ * @param {object} [options]
+ * @param {Array<string>|Set<string>} [options.pinnedModuleIds]
+ * @param {object|null} [options.comparisonTarget] - classification's
+ *   `comparisonTarget` (see compatibility-classifier.js)
  */
-export function hashResults(packages) {
+export function hashResults(packages, { pinnedModuleIds = [], comparisonTarget = null } = {}) {
   const stableShape = (packages ?? [])
     .map((pkg) => ({
       id: pkg.id,
@@ -84,7 +126,14 @@ export function hashResults(packages) {
       status: pkg.status ?? null,
     }))
     .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
-  return fnv1aHash(stableStringify(stableShape));
+
+  const pinnedIds = Array.from(
+    pinnedModuleIds instanceof Set ? pinnedModuleIds : (pinnedModuleIds ?? [])
+  ).sort();
+
+  return fnv1aHash(
+    stableStringify({ packages: stableShape, pinnedModuleIds: pinnedIds, comparisonTarget })
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -222,6 +271,185 @@ export function summarizeCompatibilityResults(packages) {
   return summary;
 }
 
+/**
+ * Fixed left-to-right order the structured per-status list renders in —
+ * same order as the checker table's own five-item taxonomy (see
+ * `STATUS_LABEL_KEYS` in checker-table-logic.js), so a GM who has looked at
+ * the checker window recognizes the list immediately.
+ */
+const STATUS_COUNT_ORDER = [
+  STATUS_LABEL_KEYS.UP_TO_DATE,
+  STATUS_LABEL_KEYS.UPDATE_AVAILABLE,
+  STATUS_LABEL_KEYS.NOT_YET_VERIFIED,
+  STATUS_LABEL_KEYS.POSSIBLY_UNMAINTAINED,
+  STATUS_LABEL_KEYS.COULDNT_CHECK,
+];
+
+/**
+ * Maps `summarizeCompatibilityResults`' output onto the shared five-item
+ * status taxonomy (`STATUS_LABEL_KEYS`/`STATUS_LABEL_I18N_KEYS` in
+ * checker-table-logic.js — reused rather than reimplemented, per issue #51)
+ * so the chat summary's structured list uses the exact same labels and
+ * ordering as the checker table. `summarizeCompatibilityResults` itself is
+ * untouched (its counts are not re-tallied here, only regrouped for
+ * display): `hardIssues` and `softIssues` are both folded into the single
+ * `notYetVerified` bucket, matching `deriveStatusLabelKey`'s own precedence
+ * rule that hard and soft severity render identical status text and are
+ * only ever visually (not textually) distinguished.
+ *
+ * Governing: SPEC-0001 REQ "Login Notification" ("per-status counts ... as
+ * a structured list rather than a single prose sentence").
+ *
+ * @param {ReturnType<typeof summarizeCompatibilityResults>} summary
+ * @returns {Array<{statusLabelKey: string, i18nKey: string, count: number}>}
+ */
+export function buildStatusCountEntries(summary) {
+  const countByKey = {
+    [STATUS_LABEL_KEYS.UP_TO_DATE]: summary?.upToDate ?? 0,
+    [STATUS_LABEL_KEYS.UPDATE_AVAILABLE]: summary?.updatesAvailable ?? 0,
+    [STATUS_LABEL_KEYS.NOT_YET_VERIFIED]: (summary?.hardIssues ?? 0) + (summary?.softIssues ?? 0),
+    [STATUS_LABEL_KEYS.POSSIBLY_UNMAINTAINED]: summary?.possiblyUnmaintained ?? 0,
+    [STATUS_LABEL_KEYS.COULDNT_CHECK]: summary?.couldntCheck ?? 0,
+  };
+
+  return STATUS_COUNT_ORDER.map((statusLabelKey) => ({
+    statusLabelKey,
+    i18nKey: STATUS_LABEL_I18N_KEYS[statusLabelKey],
+    count: countByKey[statusLabelKey],
+  }));
+}
+
+// ---------------------------------------------------------------------------
+// Version context (pure) — SPEC-0001 REQ "Login Notification": "MUST state
+// the running Foundry version and the active comparison target, and MUST
+// identify whether that target is authoritative or inferred."
+//
+// Judgment call (documented per issue #51, not applied silently): this
+// reimplements, rather than reuses, the same four-branch mapping
+// `#buildComparisonTargetContext` (scripts/checker-table.js) already does
+// for the checker window. That method is private, keyed to
+// `CheckerTable.Target*` i18n strings scoped to the window's own longer
+// paragraph copy, and this would only be its *second* call site —
+// CLAUDE.md project rule 2 ("no abstraction until the third use") argues
+// against extracting on that basis alone. Two more concrete reasons tip the
+// same direction here:
+//
+// - The two surfaces need different output shapes. The window's version
+//   needs CSS hook fields (`statusClass`/`iconClass`) for a persistent
+//   badge; the chat summary is a single line in a whispered message with no
+//   equivalent styling surface, and additionally has to fold in the running
+//   Foundry version (which the window's note text doesn't mention at all —
+//   see `#buildComparisonTargetContext`'s four strings). A shared function
+//   would either grow parameters/branches to cover both call sites' needs,
+//   or become a thin wrapper around little more than "which of 4 branches
+//   applies," which is most of this function's actual logic anyway.
+// - This file and scripts/checker-table.js are both mid-flight for a
+//   sibling issue (#48) touching checker-table.js/checker-table-logic.js
+//   for an unrelated concern in the same review window. Renaming
+//   `CheckerTable.Target*` i18n keys to a neutral namespace and moving this
+//   logic into checker-table-logic.js would touch the same files #48 is
+//   already changing, for a refactor this issue doesn't strictly require.
+//
+// If a third call site for this exact branching ever shows up, that's the
+// point to extract for real, with both existing call sites converted.
+// ---------------------------------------------------------------------------
+
+export const VERSION_CONTEXT_CASES = Object.freeze({
+  CONFIRMED_NEWER: "confirmedNewer",
+  CONFIRMED_CURRENT: "confirmedCurrent",
+  INFERRED: "inferred",
+  NO_EVIDENCE: "noEvidence",
+});
+
+/**
+ * Maps a classification's `comparisonTarget` (see
+ * compatibility-classifier.js's `determineComparisonTarget`) onto the four
+ * cases the chat summary's version-context line distinguishes. Pure — the
+ * caller resolves the returned `case`/`targetVersion` to actual i18n text.
+ *
+ * A `comparisonTarget` of `null` (classification never having run) is
+ * treated the same as `NO_EVIDENCE` — "no target beyond the running
+ * version is available" per REQ "Login Notification", rather than a
+ * missing/omitted line.
+ *
+ * Governing: ADR-0001 (amended 2026-08-15), SPEC-0001 REQ "Login
+ * Notification", SPEC-0001 REQ "Target Version Determination".
+ *
+ * @param {{source: 'authoritative'|'inferred', rawVersion: string|null, isNewer: boolean, hasPeerSignal: boolean}|null} comparisonTarget
+ * @returns {{case: string, targetVersion: string|null}}
+ */
+export function deriveVersionContext(comparisonTarget) {
+  if (!comparisonTarget) {
+    return { case: VERSION_CONTEXT_CASES.NO_EVIDENCE, targetVersion: null };
+  }
+
+  if (comparisonTarget.source === "authoritative") {
+    return {
+      case: comparisonTarget.isNewer
+        ? VERSION_CONTEXT_CASES.CONFIRMED_NEWER
+        : VERSION_CONTEXT_CASES.CONFIRMED_CURRENT,
+      targetVersion: comparisonTarget.rawVersion,
+    };
+  }
+
+  if (comparisonTarget.hasPeerSignal) {
+    return { case: VERSION_CONTEXT_CASES.INFERRED, targetVersion: comparisonTarget.rawVersion };
+  }
+
+  return { case: VERSION_CONTEXT_CASES.NO_EVIDENCE, targetVersion: null };
+}
+
+// ---------------------------------------------------------------------------
+// Pinned-module callout (pure) — SPEC-0001 REQ "Login Notification": "MUST
+// name each pinned module whose status is not 'Up to date & verified' ...
+// Pinned modules with a clean status MUST NOT be named."
+// ---------------------------------------------------------------------------
+
+/**
+ * Builds the list of pinned modules the chat summary names: every pinned
+ * module whose derived status (via `deriveStatusLabelKey`, reused rather
+ * than reimplemented — same status taxonomy as the checker table) is not
+ * "Up to date & verified." A clean pinned module, or a pinned id with no
+ * matching package in `packages` (e.g. no longer installed/active), is
+ * silently excluded rather than listed. An empty return covers both "no
+ * module pinned" and "every pinned module is clean" — the caller renders
+ * no callout section in either case, matching REQ "Login Notification"
+ * ("Pinned modules with a clean status MUST NOT be named ... the summary
+ * MUST omit this section entirely" for the no-pins case).
+ *
+ * Naming a module here never changes `summarizeCompatibilityResults`'
+ * counts or `shouldShowToast`'s decision — both are computed independently
+ * from the same `packages`/`pinnedModuleIds` inputs, so a soft-severity
+ * pinned module can appear in this list while still being excluded from
+ * the "problem" figures and the toast (REQ "Login Notification", "Soft-
+ * severity pinned module is named but not escalated" scenario).
+ *
+ * Governing: SPEC-0001 REQ "Login Notification".
+ *
+ * @param {Array<string>|Set<string>} pinnedModuleIds
+ * @param {Array} packages - classified packages
+ * @returns {Array<{id: string, title: string, statusLabelKey: string, i18nKey: string}>}
+ */
+export function buildPinnedCallout(pinnedModuleIds, packages) {
+  const pinned =
+    pinnedModuleIds instanceof Set ? pinnedModuleIds : new Set(pinnedModuleIds ?? []);
+  if (pinned.size === 0) return [];
+
+  const entries = [];
+  for (const pkg of packages ?? []) {
+    if (!pinned.has(pkg.id)) continue;
+    const statusLabelKey = deriveStatusLabelKey(pkg);
+    if (statusLabelKey === STATUS_LABEL_KEYS.UP_TO_DATE) continue;
+    entries.push({
+      id: pkg.id,
+      title: pkg.title ?? pkg.id,
+      statusLabelKey,
+      i18nKey: STATUS_LABEL_I18N_KEYS[statusLabelKey],
+    });
+  }
+  return entries;
+}
+
 // ---------------------------------------------------------------------------
 // Foundry glue: the only code below reads `game` / `game.settings` /
 // `ChatMessage` / `ui` / `document`. Kept thin so the logic above stays
@@ -343,6 +571,17 @@ function readPinnedModuleIds(gameInstance) {
   }
 }
 
+/** Maps a `VERSION_CONTEXT_CASES` value to its languages/en.json key. */
+const VERSION_CONTEXT_I18N_KEYS = {
+  [VERSION_CONTEXT_CASES.CONFIRMED_NEWER]:
+    "THE-PLUGIN-PLUGIN.LoginNotification.VersionContextConfirmedNewer",
+  [VERSION_CONTEXT_CASES.CONFIRMED_CURRENT]:
+    "THE-PLUGIN-PLUGIN.LoginNotification.VersionContextConfirmedCurrent",
+  [VERSION_CONTEXT_CASES.INFERRED]: "THE-PLUGIN-PLUGIN.LoginNotification.VersionContextInferred",
+  [VERSION_CONTEXT_CASES.NO_EVIDENCE]:
+    "THE-PLUGIN-PLUGIN.LoginNotification.VersionContextNoEvidence",
+};
+
 /**
  * Builds the whispered chat message's HTML content and posts it via
  * `ChatMessage.create` (standard behavior — persists in the chat log like
@@ -352,23 +591,79 @@ function readPinnedModuleIds(gameInstance) {
  *
  * Governing: SPEC-0001 REQ "Login Notification" ("whispered chat message
  * ... with buttons or links to open the checker window ... MUST persist in
- * the chat log").
+ * the chat log"; structured per-status list; version-context line;
+ * pinned-module callout; volunteer reminder removed — see design.md "The
+ * login notification answers 'does this need me?', the window answers
+ * 'what exactly?'").
+ *
+ * @param {object} gameInstance
+ * @param {object} summary - `summarizeCompatibilityResults` output
+ * @param {object|null} comparisonTarget - classification's `comparisonTarget`
+ * @param {string|null} runningVersion - `game.release.version`
+ * @param {Array<string>|Set<string>} pinnedModuleIds
+ * @param {Array} packages - classified packages (for the pinned callout)
  */
-async function postChatSummary(gameInstance, summary) {
+async function postChatSummary(
+  gameInstance,
+  { summary, comparisonTarget, runningVersion, pinnedModuleIds, packages }
+) {
   const i18n = gameInstance.i18n;
+
+  // Governing: SPEC-0001 REQ "Login Notification" — "MUST present its
+  // per-status counts as a structured list rather than a single prose
+  // sentence."
+  const statusItems = buildStatusCountEntries(summary)
+    .map(
+      (entry) =>
+        `<li>${i18n.format("THE-PLUGIN-PLUGIN.LoginNotification.StatusCountItem", {
+          label: i18n.localize(entry.i18nKey),
+          count: entry.count,
+        })}</li>`
+    )
+    .join("");
+
+  // Governing: SPEC-0001 REQ "Login Notification" — "MUST state the running
+  // Foundry version and the active comparison target, and MUST identify
+  // whether that target is authoritative or inferred ... When no target
+  // beyond the running version is available, it MUST say so rather than
+  // omitting the line."
+  const versionContext = deriveVersionContext(comparisonTarget);
+  const versionContextNote = i18n.format(VERSION_CONTEXT_I18N_KEYS[versionContext.case], {
+    runningVersion: runningVersion ?? i18n.localize("THE-PLUGIN-PLUGIN.LoginNotification.VersionUnknown"),
+    targetVersion: versionContext.targetVersion ?? "",
+  });
+
+  // Governing: SPEC-0001 REQ "Login Notification" — "MUST name each pinned
+  // module whose status is not 'Up to date & verified' ... When no module
+  // is pinned, the summary MUST omit this section entirely."
+  const pinnedEntries = buildPinnedCallout(pinnedModuleIds, packages);
+  const pinnedSection = pinnedEntries.length
+    ? [
+        `<p class="the-plugin-plugin-pinned-heading">${i18n.localize(
+          "THE-PLUGIN-PLUGIN.LoginNotification.PinnedHeading"
+        )}</p>`,
+        `<ul class="the-plugin-plugin-pinned-list">`,
+        pinnedEntries
+          .map(
+            (entry) =>
+              `<li>${i18n.format("THE-PLUGIN-PLUGIN.LoginNotification.PinnedItem", {
+                title: entry.title,
+                status: i18n.localize(entry.i18nKey),
+              })}</li>`
+          )
+          .join(""),
+        `</ul>`,
+      ].join("")
+    : "";
+
   const content = [
     `<div class="the-plugin-plugin-login-summary">`,
-    `<p>${i18n.format("THE-PLUGIN-PLUGIN.LoginNotification.Summary", {
+    `<p>${i18n.format("THE-PLUGIN-PLUGIN.LoginNotification.ResultsHeading", {
       total: summary.total,
-      upToDate: summary.upToDate,
-      updatesAvailable: summary.updatesAvailable,
-      issues: summary.hardIssues,
-      unmaintained: summary.possiblyUnmaintained,
-      couldntCheck: summary.couldntCheck,
     })}</p>`,
-    `<p class="the-plugin-plugin-volunteer-reminder">${i18n.localize(
-      "THE-PLUGIN-PLUGIN.LoginNotification.VolunteerReminder"
-    )}</p>`,
+    `<ul class="the-plugin-plugin-status-list">${statusItems}</ul>`,
+    `<p class="the-plugin-plugin-version-context">${versionContextNote}</p>`,
+    pinnedSection,
     `<button type="button" data-action="${CHECKER_OPEN_ACTION}">${i18n.localize(
       "THE-PLUGIN-PLUGIN.LoginNotification.OpenChecker"
     )}</button>`,
@@ -432,7 +727,13 @@ export async function runLoginNotification(options = {}) {
   }
 
   const packages = classification?.packages ?? [];
-  const currentHash = hashResults(packages);
+  const comparisonTarget = classification?.comparisonTarget ?? null;
+  // Read once up front (not just for toast gating, as before issue #51) so
+  // the same pinned-ids snapshot feeds both the hash (see hashResults'
+  // docstring for why the pin set must be covered) and the chat summary's
+  // pinned-module callout.
+  const pinnedModuleIds = readPinnedModuleIds(gameInstance);
+  const currentHash = hashResults(packages, { pinnedModuleIds, comparisonTarget });
   const frequency = readFrequencySetting(gameInstance);
   const storedHash = readStoredHash(gameInstance);
   const lastNotifiedAt = readLastNotifiedAt(gameInstance);
@@ -454,12 +755,17 @@ export async function runLoginNotification(options = {}) {
   const summary = summarizeCompatibilityResults(packages);
 
   try {
-    await postChatSummary(gameInstance, summary);
+    await postChatSummary(gameInstance, {
+      summary,
+      comparisonTarget,
+      runningVersion: gameInstance?.release?.version ?? null,
+      pinnedModuleIds,
+      packages,
+    });
   } catch (err) {
     console.error(`${MODULE_ID} | login notification: failed to post chat summary`, err);
   }
 
-  const pinnedModuleIds = readPinnedModuleIds(gameInstance);
   if (shouldShowToast(pinnedModuleIds, packages)) {
     globalThis.ui?.notifications?.warn(
       gameInstance.i18n.localize("THE-PLUGIN-PLUGIN.LoginNotification.ToastWarning")
