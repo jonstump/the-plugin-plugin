@@ -141,11 +141,16 @@ The system SHALL record, for every successfully resolved package, whether
 the manifest came from the declared URL or from the fallback, and SHALL
 surface that distinction to the GM.
 
-Fallback-sourced data describes a repository's default branch, which MAY be
-ahead of any released build. Presenting it as the package's latest
-*published* release would misstate what the developer actually shipped,
-violating project rule 4 (dev-declared, not tested) and — by implying a
-volunteer is behind on a release they never made — project rule 1.
+Fallback-sourced data describes a repository's default branch, which MAY
+differ from any released build in **either** direction. Presenting it as
+the package's latest *published* release would misstate what the developer
+actually shipped, violating project rule 4 (dev-declared, not tested) and —
+by implying a volunteer is behind on a release they never made — project
+rule 1.
+
+Marking provenance is necessary but **not sufficient**: a correctly-marked
+row can still carry a wrong value. Which fields may be used at all is
+governed by REQ "Fallback Field Trust".
 
 - Each resolved package result MUST carry a provenance value distinguishing
   `declared` from `fallback`.
@@ -166,6 +171,61 @@ volunteer is behind on a release they never made — project rule 1.
 
 - **WHEN** a package's data was obtained from its declared manifest URL
 - **THEN** the row carries no fallback marking
+
+### Requirement: Fallback Field Trust
+
+The system SHALL treat a fallback-sourced manifest field by field rather
+than as a single trustworthy unit, and MUST NOT derive update availability
+from a fallback-sourced `version` (per ADR-0003 as amended 2026-08-16).
+
+A repository's committed `version` is frequently stamped by release
+tooling rather than maintained by hand, so the value on the default branch
+may be an arbitrarily stale placeholder. `compatibility.verified` is
+hand-edited in that same committed file and does not share this defect.
+
+- The system MAY use `compatibility.verified`, and the legacy
+  `compatibleCoreVersion` fallback, from a fallback-sourced manifest. This
+  grants permission generally; REQ "Inferred Latest Participation" mandates
+  one specific use of it, and REQ "Compatibility Severity Classification"
+  in SPEC-0001 another.
+- The system MAY use `url`, `bugs`, and `changelog` from a fallback-sourced
+  manifest, which are not version-sensitive.
+- The system MUST treat a fallback-sourced `version` as **unknown**: it
+  MUST NOT surface it as the package's latest version, and MUST NOT derive
+  an update-available verdict from it.
+- The system MUST NOT present unknown update availability as "up to date",
+  or as any other wording asserting the installed version is current.
+- The system MUST NOT gate use of a fallback-sourced `version` on a
+  plausibility check such as "only when newer than the installed version" —
+  a stale placeholder that happens to be higher passes such a check and
+  still reports wrongly.
+- These constraints apply only to fallback-sourced results. A
+  declared-sourced `version` is the released version and is used unchanged.
+
+#### Scenario: Fallback version older than installed
+
+- **WHEN** a package resolves via the fallback and the fetched `version` is
+  older than the installed version
+- **THEN** the system reports update availability as unknown, and does not
+  report the package as up to date
+
+#### Scenario: Fallback version newer than installed
+
+- **WHEN** a package resolves via the fallback and the fetched `version` is
+  newer than the installed version
+- **THEN** the system still reports update availability as unknown, because
+  the fetched value is not evidence of a published release
+
+#### Scenario: Compatibility retained from a fallback-sourced manifest
+
+- **WHEN** a package resolves via the fallback
+- **THEN** its `compatibility.verified` is used for severity classification
+  and for the peer-inference computation, unchanged
+
+#### Scenario: Declared-sourced version is unaffected
+
+- **WHEN** a package resolves from its declared manifest URL
+- **THEN** its `version` is used to determine update availability as before
 
 ### Requirement: Inferred Latest Participation
 

@@ -31,7 +31,9 @@ in force.
 - Restore ADR-0001's `inferredLatest` to working order by giving it enough
   manifest data to find a peer signal.
 - Keep fallback-sourced data honestly distinguishable from released data,
-  so the checker never overstates what a developer shipped.
+  so the checker never overstates what a developer shipped — and, where a
+  field cannot support that honestly, decline to use it at all rather than
+  label it more carefully (REQ "Fallback Field Trust").
 
 ### Non-Goals
 
@@ -118,6 +120,51 @@ own, escalate a notification.
   single optimistic peer from causing user-visible alarm, so a second
   mechanism would add complexity without a demonstrated failure to prevent.
 
+### A fallback manifest is trusted field by field, not as a unit
+
+**Choice**: Use `compatibility.verified` (and legacy
+`compatibleCoreVersion`), `url`, `bugs` and `changelog` from a
+fallback-sourced manifest; treat its `version` as unknown.
+
+**Rationale**: The two fields have different reliability, for a mechanical
+reason. Comparing `Smart-Target`'s released and committed manifests
+directly:
+
+```
+RELEASED  (releases/latest/download/module.json): version=4.0.0  verified=14
+COMMITTED (raw.githubusercontent.com/HEAD)      : version=0.5.1  verified=14
+```
+
+`version` differs by three major versions; `verified` is identical. Release
+tooling stamps `version` at tag time, so the committed value is a
+placeholder nobody maintains — this project's own `release.yml` does the
+same. `compatibility.verified` is hand-edited in the committed file, which
+is exactly why it stays current.
+
+The original design treated a fetched manifest as one trustworthy object.
+That produced the worst available failure: a GM told they were up to date
+while three major versions behind. Between over-alarming and a false
+all-clear, the false all-clear is the one that never gets checked.
+
+**Alternatives considered**:
+- Fetch the real version from the GitHub API (`releases/latest` → tag):
+  rejected — accurate, but spends the 60/hr unauthenticated budget ADR-0003
+  deliberately reserved for the unmaintained heuristic. A large modlist
+  could exhaust it and degrade both features at once, in a confusing
+  time-dependent way.
+- Trust the fallback `version` only when it is newer than installed:
+  rejected — a stale placeholder that happens to be higher passes the guard
+  and still reports wrongly. Plausibility is not evidence, and the spec
+  rejects this implementation by name.
+- Keep surfacing the version but label it more loudly: rejected — the row
+  that caused this was already correctly labelled. Labelling had its
+  chance.
+
+**Cost, accepted**: update availability is lost for every fallback-sourced
+package — 3 of 7 in the tested world — and a package whose committed
+`version` happens to be accurate is penalised alongside those where it is
+not. There is no way to distinguish them without the API call above.
+
 ### Provenance is a first-class field, not a UI afterthought
 
 **Choice**: Record `declared` vs `fallback` on the result object, and drive
@@ -173,12 +220,15 @@ concurrently.
 
 ## Risks / Trade-offs
 
-- **Default-branch data is not release data.** A repository whose default
-  branch is ahead of its latest release reports a version that cannot yet
-  be downloaded → Mitigated by REQ "Result Provenance", which forbids
-  presenting fallback data as the latest published version and requires it
-  be visually distinguished. Not eliminated: a GM who ignores the marking
-  can still misread the number.
+- **Default-branch data is not release data, in either direction.** The
+  original framing of this risk assumed the default branch would be *ahead*
+  of the latest release, and treated provenance marking as the mitigation.
+  Live testing disproved both halves: `Smart-Target` reported a fallback
+  version of `0.5.1` against an installed `0.9.8` and a real latest release
+  of `4.0.0`, on a row that *was* correctly marked → Mitigated by REQ
+  "Fallback Field Trust", which removes the unreliable field from use
+  entirely rather than relying on the GM to read a label. Marking remains
+  necessary; it was never sufficient.
 - **Coverage remains partial and uneven.** Measured recovery is 1/7 → 4/7.
   Game systems that build their manifest (`sfrpg`) and non-GitHub hosts
   (`pings`, `settings-extender` on GitLab) gain nothing → Accepted, and
