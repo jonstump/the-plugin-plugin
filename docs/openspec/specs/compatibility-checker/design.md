@@ -117,6 +117,40 @@ leave to implementation, because both fail *silently*:
   `false` on an offline or firewalled server, and inference degrades
   gracefully to "no evidence" there, which is better than no target at all.
 
+**Implementation note**: `scripts/compatibility-classifier.js` names this
+result `comparisonTarget` — `{source: 'authoritative'|'inferred', value,
+rawVersion, isNewer, hasPeerSignal}` — reflecting that either path can
+produce it. `inferredLatest` (below) is specifically the peer-inference
+sub-computation, surfaced as `comparisonTarget.value` only when
+`source === 'inferred'`.
+
+### `compatibility.verified` and the authoritative target are compared at generation granularity
+
+**Choice**: `game.data.coreUpdate.version` is a full point version (e.g.
+`"14.366"`), but before it's used as a comparison target it's normalized
+to its leading generation segment (`"14"`) via `toGeneration()`. The full
+point version is preserved separately as `comparisonTarget.rawVersion` for
+GM-facing display; only the value used in comparisons is generation-scoped.
+
+**Rationale**: `compatibility.verified` is conventionally declared at
+generation granularity — developers write `verified: "14"`, not
+`verified: "14.366"` — which is also the granularity peer inference
+(`computeInferredLatest`) already operates at, since it's built from other
+packages' own `verified` fields. Comparing a full point version directly
+against a generation-only `verified` value would flag a package correctly
+verified against an entire generation as behind a specific patch build
+within that same generation — a false, noisy status of exactly the kind
+CLAUDE.md project rule 1 exists to prevent.
+
+**Alternatives considered**:
+- Compare full point versions directly: rejected — produces a false
+  "behind" status for any package verified against the current generation
+  the moment Foundry ships a patch release, which says nothing about the
+  package's actual compatibility.
+- Normalize `compatibility.verified` up to point-version granularity
+  instead: rejected — manifests don't reliably declare point-version
+  compatibility, so there would be nothing meaningful to normalize to.
+
 ### `inferredLatest` computed from the same fetch pass as the update check
 
 **Choice**: When used as the fallback, `inferredLatest` is computed as a
