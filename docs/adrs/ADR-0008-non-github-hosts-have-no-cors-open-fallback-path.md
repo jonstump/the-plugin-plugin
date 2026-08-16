@@ -7,6 +7,16 @@ extends: [ADR-0003]
 
 # ADR-0008: Non-GitHub hosts have no CORS-open fallback path — a documented limit, not an oversight
 
+> ## ⚠️ Amended 2026-08-16 — a CORS-open third-party mirror exists for GitLab
+>
+> This ADR tested GitLab's *own* endpoints and correctly found neither
+> CORS-open. It did not test third-party mirrors of that same content —
+> `cdn.statically.io` mirrors GitLab (and GitHub) source with
+> `Access-Control-Allow-Origin: *`, confirmed directly against real content,
+> including a `HEAD` ref alias equivalent to
+> `raw.githubusercontent.com/.../HEAD/...`. The "accept and document as
+> permanent" decision below is revised — see "Amendment" at the end.
+
 ## Context and Problem Statement
 
 SPEC-0002's fallback mechanism (ADR-0003) is scoped to `github.com`-hosted
@@ -170,3 +180,86 @@ proposal without re-testing, unless the revisit condition below applies.
   the declared URL, verify CORS headers before committing) generalizes —
   this ADR's conclusion is specific to GitLab as measured, not a blanket
   claim about every non-GitHub forge.
+
+## Amendment — 2026-08-16, a CORS-open third-party GitLab mirror exists
+
+### What was missed
+
+The original measurement was correct as far as it went — GitLab's *own*
+raw-file endpoint and REST API both genuinely lack
+`Access-Control-Allow-Origin`. What it didn't check: whether a third party
+already mirrors that same content with CORS enabled. `cdn.statically.io`
+does, for both GitLab and GitHub:
+
+```
+GET https://cdn.statically.io/gl/foundry-azzurite/pings@HEAD/README.md
+Status: 200, access-control-allow-origin: *
+content-length: 942 — byte-for-byte the same file gitlab.com serves,
+  confirmed against the actual README content, not a generic response.
+
+GET https://cdn.statically.io/gl/foundry-azzurite/pings@HEAD/dist/pings/module.json
+Status: 404 — the CI-built artifact still isn't in source, so this
+  specific package is still unreachable, for the *separate* reason
+  already noted in the original measurement (not a CORS problem).
+```
+
+The `@HEAD` ref resolves to the actual default branch without a prior
+lookup, exactly mirroring `raw.githubusercontent.com/.../HEAD/...`
+(ADR-0003) — no extra request needed to first discover the branch name.
+
+### Revised decision
+
+Add `cdn.statically.io/gl/<owner>/<repo>@HEAD/<filename>` as a second
+fallback target, parallel to ADR-0003's `raw.githubusercontent.com`
+fallback, for `gitlab.com`-hosted declared URLs. Same trust rules apply
+identically: this is a default-branch read, not a released-tag read, so
+SPEC-0002 REQ "Fallback Field Trust" governs it exactly the same way it
+already governs the GitHub raw/HEAD fallback — `compatibility.verified` is
+used, `version` is treated as unknown.
+
+This is accepted as a **new, and materially different, kind of
+dependency** from `raw.githubusercontent.com`: GitHub's raw-file service is
+run by the dominant host itself; `statically.io` is a separate third party
+neither this project nor GitLab nor the package developer controls.
+Explicitly not over-engineered against that risk — no fallback-of-fallback,
+no health check, no staleness detection. If `statically.io` becomes
+unreliable or disappears, GitLab-hosted packages degrade to exactly
+today's "Couldn't check," the same outcome as if this amendment had never
+shipped. That degrade path costs nothing to keep working because it
+already exists and is already tested.
+
+### Consequences
+
+* Good, because GitLab-hosted packages that commit their manifest to the
+  repository (the common case — `pings`/`settings-extender`'s CI-artifact
+  pattern is the exception, not the rule) gain the same coverage GitHub
+  gets from the raw/HEAD fallback.
+* Good, because the failure mode if the CDN goes away is identical to
+  today's baseline, not worse — nothing regresses, coverage just stops
+  improving.
+* Neutral, because this doesn't touch REQ "Release Tag Resolution"
+  (ADR-0003 Amendment 2) — that stays GitHub-specific; `statically.io` has
+  no equivalent release-tag API, so GitLab-hosted packages get the
+  raw/HEAD-equivalent trust level, not the fully-trusted `release`
+  provenance GitHub-hosted packages can reach.
+* Bad, because it's a new third-party dependency of unproven longevity,
+  accepted deliberately rather than engineered around.
+
+### Confirmation
+
+Code review should reject any GitLab-fallback implementation that: derives
+the mirror URL from anything other than the declared manifest URL (same
+constraint as ADR-0003's GitHub derivation); trusts a GitLab-mirrored
+`version` field (must follow REQ "Fallback Field Trust" identically to the
+GitHub case); or adds retry/health-check/staleness logic beyond what the
+GitHub fallback already has — this amendment is deliberately as simple as
+the mechanism it mirrors.
+
+### Revisit if (supersedes the original revisit note for GitLab specifically)
+
+`cdn.statically.io` becomes unreliable, changes its URL scheme, or
+disappears — in which case this amendment's fallback attempt simply starts
+failing and packages degrade to "Couldn't check," the pre-amendment
+baseline. No urgent action required if that happens; revisit only if a
+better-suited mirror or a change in GitLab's own CORS policy makes this
+amendment worth replacing.

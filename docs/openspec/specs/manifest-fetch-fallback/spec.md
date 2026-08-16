@@ -1,7 +1,7 @@
 ---
 status: approved
 date: 2026-08-15
-implements: [ADR-0003]
+implements: [ADR-0003, ADR-0008]
 extends: [SPEC-0001]
 ---
 
@@ -19,11 +19,14 @@ seven packages returned "Couldn't check."
 
 This capability adds a second, CORS-open attempt when the declared URL
 fails: a `raw.githubusercontent.com` URL derived from the declared URL
-itself. It realizes ADR-0003 and extends SPEC-0001's manifest-check
-behavior rather than replacing it — the declared URL remains the primary
-and preferred source, and every existing SPEC-0001 guarantee (per-package
-error isolation, concurrency capping, session caching) continues to hold
-unchanged.
+itself, for `github.com`-hosted packages. A `cdn.statically.io` mirror URL
+serves the same role for `gitlab.com`-hosted packages, since GitLab's own
+raw-file endpoint and API are not CORS-open (ADR-0008, amended
+2026-08-16). It realizes ADR-0003 and ADR-0008 and extends SPEC-0001's
+manifest-check behavior rather than replacing it — the declared URL
+remains the primary and preferred source, and every existing SPEC-0001
+guarantee (per-package error isolation, concurrency capping, session
+caching) continues to hold unchanged.
 
 Because the fallback reads a repository's default branch rather than its
 released tag, the data it produces is **not** equivalent to the data the
@@ -89,17 +92,24 @@ The system SHALL derive the fallback URL from the package's **declared
 manifest URL**, and MUST NOT derive it from the fetched manifest body.
 
 - The system MUST parse `<owner>` and `<repo>` from the declared manifest
-  URL when that URL is a `github.com` URL.
+  URL when that URL is a `github.com` or `gitlab.com` URL (per ADR-0008
+  Amendment, 2026-08-16).
 - The system MUST NOT source `<owner>`/`<repo>` from the fetched manifest's
   `url` or `bugs` fields. Those fields live inside the manifest body, which
   is by definition unavailable on the path where the fallback is required.
 - The system MUST carry the filename from the declared manifest URL into
   the fallback URL, and MUST NOT hardcode `module.json`. Game systems
   declare `system.json`.
-- The derived URL MUST take the form
-  `https://raw.githubusercontent.com/<owner>/<repo>/HEAD/<filename>`.
+- For a `github.com`-hosted declared URL, the derived URL MUST take the
+  form `https://raw.githubusercontent.com/<owner>/<repo>/HEAD/<filename>`.
+- For a `gitlab.com`-hosted declared URL, the derived URL MUST take the
+  form `https://cdn.statically.io/gl/<owner>/<repo>@HEAD/<filename>` (per
+  ADR-0008 Amendment) — a third-party CORS-open mirror, since GitLab's own
+  raw-file endpoint sends no `Access-Control-Allow-Origin` header
+  (measured, ADR-0008). Both forms resolve `HEAD` to the actual default
+  branch without a prior lookup.
 
-#### Scenario: Module manifest URL
+#### Scenario: Module manifest URL (GitHub)
 
 - **WHEN** a package declares
   `https://github.com/ruipin/fvtt-lib-wrapper/releases/latest/download/module.json`
@@ -107,12 +117,20 @@ manifest URL**, and MUST NOT derive it from the fetched manifest body.
 - **THEN** the system requests
   `https://raw.githubusercontent.com/ruipin/fvtt-lib-wrapper/HEAD/module.json`
 
+#### Scenario: Module manifest URL (GitLab)
+
+- **WHEN** a package declares a `gitlab.com`-hosted manifest URL
+  (`https://gitlab.com/<owner>/<repo>/...`) and that URL fails
+- **THEN** the system requests
+  `https://cdn.statically.io/gl/<owner>/<repo>@HEAD/<filename>`, with
+  `<owner>`, `<repo>`, and `<filename>` parsed from the declared URL
+
 #### Scenario: Game system manifest URL
 
 - **WHEN** the active game system declares a manifest URL ending in
   `system.json` and that URL fails
 - **THEN** the derived fallback URL ends in `system.json`, not
-  `module.json`
+  `module.json`, regardless of which host-specific form applies
 
 #### Scenario: Manifest body is unavailable
 
@@ -124,35 +142,52 @@ manifest URL**, and MUST NOT derive it from the fetched manifest body.
 ### Requirement: Fallback Scope and Limits
 
 The system SHALL restrict the fallback to packages whose declared manifest
-URL is a `github.com` URL, and SHALL report an honest "Couldn't check" for
-every package the fallback cannot serve.
+URL is a `github.com` or `gitlab.com` URL (per ADR-0008 Amendment,
+2026-08-16), and SHALL report an honest "Couldn't check" for every package
+the fallback cannot serve.
 
 - The system MUST NOT attempt a fallback for packages hosted anywhere other
-  than `github.com`.
+  than `github.com` or `gitlab.com` — there is no CORS-open path (own or
+  third-party mirror) known for any other host, per ADR-0008.
 - The system MUST treat a non-200 response from the fallback URL as a
   terminal failure for that package, with no further attempts.
+- The system MUST NOT attempt fallback-of-fallback logic for the GitLab
+  path (e.g. retrying a second mirror if `cdn.statically.io` fails) — per
+  ADR-0008 Amendment, that failure degrades to "Couldn't check" exactly as
+  it would have without this fallback at all, deliberately not engineered
+  around further.
 - The system MAY contact the GitHub API as part of resolving a package's
-  fallback, per REQ "Release Tag Resolution" (ADR-0003 Amendment 2,
-  2026-08-16) — but only within the shared rate-limit budget that
-  requirement defines, which also governs SPEC-0001 REQ "Possibly
+  GitHub-hosted fallback, per REQ "Release Tag Resolution" (ADR-0003
+  Amendment 2, 2026-08-16) — but only within the shared rate-limit budget
+  that requirement defines, which also governs SPEC-0001 REQ "Possibly
   Unmaintained Heuristic"'s own GitHub API usage. Neither consumer may
-  spend the budget independently of the other.
+  spend the budget independently of the other. This does not apply to the
+  GitLab path, which has no equivalent release-tag API available.
 
-#### Scenario: Non-GitHub host
+#### Scenario: Unsupported host
 
 - **WHEN** a package declares a manifest URL on a host other than
-  `github.com` and that URL fails
+  `github.com` or `gitlab.com`, and that URL fails
 - **THEN** the system records "Couldn't check" without attempting any
-  fallback request. This is a permanent limitation for hosts whose public
-  endpoints are not CORS-open, not a pending gap — see ADR-0008, which
-  measured that GitLab's raw-file and API endpoints both lack an
-  `Access-Control-Allow-Origin` header.
+  fallback request. This is a permanent limitation for hosts with no known
+  CORS-open path, own or third-party, not a pending gap — see ADR-0008.
+
+#### Scenario: GitLab mirror fails
+
+- **WHEN** a package's declared URL is `gitlab.com`-hosted and fails, and
+  the `cdn.statically.io` mirror fetch also fails (network error, non-200,
+  the manifest is a build artifact not in source, or the mirror is
+  unreachable)
+- **THEN** the system records "Couldn't check" for that package — the
+  same outcome as if the GitLab fallback did not exist, per ADR-0008
+  Amendment's explicit no-engineering-around-it stance
 
 #### Scenario: Manifest absent from the default branch
 
 - **WHEN** a package's manifest is a build artifact not committed to the
   repository root, so the derived fallback URL returns 404
-- **THEN** the system records "Couldn't check" for that package
+- **THEN** the system records "Couldn't check" for that package,
+  regardless of which host-specific fallback form was attempted
 
 ### Requirement: Release Tag Resolution
 
@@ -261,7 +296,9 @@ governed by REQ "Fallback Field Trust".
 
 #### Scenario: Fallback-sourced row
 
-- **WHEN** a package's data was obtained via the raw/HEAD fallback URL
+- **WHEN** a package's data was obtained via the default-branch fallback
+  URL (`raw.githubusercontent.com` or the `cdn.statically.io` GitLab
+  mirror)
 - **THEN** the checker table marks that row as sourced from the
   repository's default branch rather than a published release
 

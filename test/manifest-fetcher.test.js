@@ -198,12 +198,30 @@ test("deriveFallbackUrl carries system.json through rather than hardcoding modul
   );
 });
 
-test("deriveFallbackUrl returns null for a non-github.com host", () => {
+test("deriveFallbackUrl returns null for a host with no known CORS-open path (ADR-0008)", () => {
   assert.equal(
-    deriveFallbackUrl("https://gitlab.com/owner/repo/-/jobs/artifacts/module.json"),
+    deriveFallbackUrl("https://bitbucket.org/owner/repo/downloads/module.json"),
     null
   );
   assert.equal(deriveFallbackUrl("https://example.com/module.json"), null);
+});
+
+// --- deriveFallbackUrl: gitlab.com (ADR-0008 Amendment, 2026-08-16) --------
+// GitLab's own raw-file endpoint and API send no Access-Control-Allow-Origin
+// header (measured, ADR-0008) — the fallback goes through cdn.statically.io,
+// a CORS-open third-party mirror, instead. Same owner/repo/filename
+// derivation as the GitHub case, just a different host template.
+
+test("deriveFallbackUrl derives a cdn.statically.io URL for a gitlab.com-hosted declared URL", () => {
+  const fallback = deriveFallbackUrl(
+    "https://gitlab.com/foundry-azzurite/pings/-/jobs/artifacts/master/raw/dist/pings/module.json?job=build"
+  );
+  assert.equal(fallback, "https://cdn.statically.io/gl/foundry-azzurite/pings@HEAD/module.json");
+});
+
+test("deriveFallbackUrl carries system.json through for a gitlab.com-hosted game system", () => {
+  const fallback = deriveFallbackUrl("https://gitlab.com/owner/some-system/-/raw/main/system.json");
+  assert.equal(fallback, "https://cdn.statically.io/gl/owner/some-system@HEAD/system.json");
 });
 
 test("deriveFallbackUrl returns null when it can't parse owner/repo/filename", () => {
@@ -408,11 +426,11 @@ test("fetchPackageManifest carries system.json through the fallback for a game s
   assert.equal(result.provenance, "fallback");
 });
 
-test("fetchPackageManifest does not attempt a fallback for a non-github.com host", async () => {
+test("fetchPackageManifest does not attempt a fallback for a host with no known CORS-open path", async () => {
   const pkg = {
-    id: "gitlab-mod",
-    title: "GitLab Mod",
-    manifestUrl: "https://gitlab.com/owner/gitlab-mod/-/jobs/artifacts/module.json",
+    id: "bitbucket-mod",
+    title: "Bitbucket Mod",
+    manifestUrl: "https://bitbucket.org/owner/bitbucket-mod/downloads/module.json",
     installedVersion: "1.0.0",
   };
   let calls = 0;
@@ -423,9 +441,67 @@ test("fetchPackageManifest does not attempt a fallback for a non-github.com host
 
   const result = await fetchPackageManifest(pkg, { fetchImpl });
 
-  assert.equal(calls, 1, "no fallback request should be issued for a non-github.com host");
+  assert.equal(calls, 1, "no fallback request should be issued for an unsupported host");
   assert.equal(result.status, "error");
   assert.equal(result.provenance, null);
+});
+
+// --- fetchPackageManifest: gitlab.com fallback (ADR-0008 Amendment) --------
+
+test("fetchPackageManifest falls back to cdn.statically.io when a gitlab.com declared URL fails", async () => {
+  const pkg = {
+    id: "pings",
+    title: "Pings",
+    manifestUrl:
+      "https://gitlab.com/foundry-azzurite/pings/-/jobs/artifacts/master/raw/dist/pings/module.json?job=build",
+    installedVersion: "1.4.0",
+  };
+  const requestedUrls = [];
+  const fetchImpl = async (url) => {
+    requestedUrls.push(url);
+    if (url === "https://cdn.statically.io/gl/foundry-azzurite/pings@HEAD/module.json") {
+      return okResponse({ version: "1.3.0", compatibility: { verified: "13" } });
+    }
+    throw new TypeError("Failed to fetch");
+  };
+
+  const result = await fetchPackageManifest(pkg, { fetchImpl });
+
+  assert.deepEqual(requestedUrls, [
+    "https://gitlab.com/foundry-azzurite/pings/-/jobs/artifacts/master/raw/dist/pings/module.json?job=build",
+    "https://cdn.statically.io/gl/foundry-azzurite/pings@HEAD/module.json",
+  ]);
+  assert.equal(result.status, "ok");
+  assert.equal(result.provenance, "fallback");
+  // Fallback Field Trust applies identically regardless of which host the
+  // fallback came from — a default-branch read is a default-branch read.
+  assert.equal(result.latestVersion, null);
+  assert.equal(result.updateAvailable, null);
+  assert.equal(result.verified, "13");
+});
+
+test("fetchPackageManifest: gitlab.com fallback also fails -> Couldn't check, same outcome as if the fallback didn't exist (ADR-0008 Amendment)", async () => {
+  // Matches the real-world pings/settings-extender case: manifest is a CI
+  // build artifact, never committed to the repo, so the mirror 404s too.
+  const pkg = {
+    id: "pings",
+    title: "Pings",
+    manifestUrl:
+      "https://gitlab.com/foundry-azzurite/pings/-/jobs/artifacts/master/raw/dist/pings/module.json?job=build",
+    installedVersion: "1.4.0",
+  };
+  const fetchImpl = async (url) => {
+    if (url.includes("cdn.statically.io")) {
+      return { ok: false, status: 404, json: async () => ({}) };
+    }
+    throw new TypeError("Failed to fetch");
+  };
+
+  const result = await fetchPackageManifest(pkg, { fetchImpl });
+
+  assert.equal(result.status, "error");
+  assert.equal(result.provenance, null);
+  assert.ok(result.error.message.includes("cdn.statically.io"));
 });
 
 test("fetchPackageManifest treats a fallback 404 as terminal (manifest not at repo root)", async () => {
@@ -680,6 +756,39 @@ test("fetchPackageManifest: budget already exhausted ({remaining: 0}) -> tag res
   assert.ok(requestedUrls.every((url) => !url.includes("api.github.com")));
   assert.equal(result.provenance, "fallback");
   assert.equal(budget.remaining, 0, "an already-exhausted budget must not go negative");
+});
+
+test("fetchPackageManifest: a gitlab.com-hosted package never spends the shared GitHub API budget (ADR-0008 Amendment regression guard)", async () => {
+  // Before the GitLab fallback existed, reaching this point in the function
+  // implied the package was necessarily github.com-hosted (deriveFallbackUrl
+  // only ever returned non-null for github.com). ADR-0008 Amendment broke
+  // that assumption — a gitlab.com package now also has a non-null
+  // fallbackUrl, so the tag-resolution budget check MUST parse the host
+  // first and only consume budget for an actual github.com match, or a
+  // GitLab-hosted package would silently burn shared rate-limit budget for
+  // an API call it could never have made.
+  const pkg = {
+    id: "pings",
+    title: "Pings",
+    manifestUrl:
+      "https://gitlab.com/foundry-azzurite/pings/-/jobs/artifacts/master/raw/dist/pings/module.json?job=build",
+    installedVersion: "1.4.0",
+  };
+  const requestedUrls = [];
+  const fetchImpl = async (url) => {
+    requestedUrls.push(url);
+    if (url.includes("cdn.statically.io")) {
+      return okResponse({ version: "1.3.0", compatibility: { verified: "13" } });
+    }
+    throw new TypeError("Failed to fetch");
+  };
+  const budget = { remaining: 5 };
+
+  const result = await fetchPackageManifest(pkg, { fetchImpl, githubApiBudget: budget });
+
+  assert.ok(requestedUrls.every((url) => !url.includes("api.github.com")));
+  assert.equal(budget.remaining, 5, "budget must be untouched by a gitlab.com-hosted package");
+  assert.equal(result.provenance, "fallback");
 });
 
 // --- consumeGithubApiBudget / DEFAULT_GITHUB_API_BUDGET ---------------------
