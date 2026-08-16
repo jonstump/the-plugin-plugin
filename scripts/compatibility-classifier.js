@@ -4,8 +4,12 @@
  * compute the three v1 signals that are shared foundation for the checker
  * table (issue #8) and login notification (issue #9):
  *
- *  - `inferredLatest` — a stand-in "newer Foundry generation" target,
- *    inferred from peer manifests (ADR-0001).
+ *  - `comparisonTarget` — the Foundry version each package's
+ *    `compatibility.verified` is measured against, beyond `game.release`.
+ *    Authoritative (`game.data.coreUpdate`) when available; otherwise a
+ *    peer-inferred fallback (`computeInferredLatest`), per ADR-0001 as
+ *    amended 2026-08-15 — see "Requirement: Target Version Determination"
+ *    below. `game.data.coreUpdate` is read, never fetched, by this module.
  *  - `severity` — hard/soft classification per package, gated on
  *    `compatibility.maximum` rather than a bare `verified` lag (ADR-0002).
  *  - `possiblyUnmaintained` — a two-signal heuristic layered on top of
@@ -72,6 +76,109 @@ export function computeInferredLatest(results, gameRelease) {
 }
 
 // ---------------------------------------------------------------------------
+// Requirement: Target Version Determination
+// ---------------------------------------------------------------------------
+
+/**
+ * Extracts the leading generation segment from a Foundry version string
+ * (e.g. "14.366" -> "14"). `compatibility.verified` is conventionally
+ * declared at generation granularity (developers write "verified: 14", not
+ * "verified: 14.366"), which is also the granularity `computeInferredLatest`
+ * already operates at (it's built from other packages' own `verified`
+ * fields). `game.data.coreUpdate.version` is a full point version, so it's
+ * normalized to the same granularity before being used as a comparison
+ * target — otherwise a package correctly verified against an entire
+ * generation would be wrongly flagged as behind a specific patch build
+ * within that same generation, which is exactly the kind of noisy, unkind
+ * false status CLAUDE.md project rule 1 exists to prevent.
+ */
+function toGeneration(versionString) {
+  if (versionString == null) return null;
+  const [generation] = String(versionString).split(/[.\-+]/);
+  return generation || null;
+}
+
+/**
+ * Determines the comparison target for compatibility checks — the Foundry
+ * version each package's `compatibility.verified` is measured against,
+ * beyond `game.release` itself. Authoritative (`game.data.coreUpdate`) when
+ * available; falls back to the peer-inferred target (`computeInferredLatest`,
+ * REQ "Inferred Latest Version") only when it isn't. Pure and synchronous —
+ * `coreUpdate` is a plain object passed in by the caller, never read from a
+ * `game` global here, so this stays testable outside a running world.
+ *
+ * Governing: ADR-0001 (amended 2026-08-15 — primary/fallback split),
+ * SPEC-0001 REQ "Target Version Determination", SPEC-0001 REQ "Inferred
+ * Latest Version".
+ *
+ * @param {Array} results - package results, forwarded to
+ *   `computeInferredLatest` only on the fallback path — per SPEC-0001
+ *   "Authoritative target available", an authoritative target must not
+ *   trigger a peer-inference computation at all.
+ * @param {string|null} gameRelease - `game.release.generation` as a string;
+ *   the running Foundry generation, at the same granularity
+ *   `compatibility.verified` is declared at.
+ * @param {object} [options]
+ * @param {object|null} [options.coreUpdate] - `game.data.coreUpdate`.
+ *   Absent/undefined/null is treated identically to an explicit
+ *   `couldReachWebsite: false` (SPEC-0001 "Foundry could not reach its
+ *   update service") — both fall back to peer inference.
+ * @param {string|null} [options.gameReleaseVersion] - `game.release.version`
+ *   (the full point version, e.g. "13.351"). Used *only* to determine
+ *   whether `coreUpdate.version` is newer than the running version — per
+ *   ADR-0001's binding constraint, this MUST compare `coreUpdate.version`
+ *   against `game.release.version` directly and MUST NOT gate on
+ *   `coreUpdate.hasUpdate` (measured live to read `false` while a newer
+ *   generation was in fact available — it's scoped to the running
+ *   generation only).
+ * @returns {{
+ *   source: 'authoritative'|'inferred',
+ *   value: string|null,
+ *   rawVersion: string|null,
+ *   isNewer: boolean,
+ *   hasPeerSignal: boolean,
+ * }}
+ *   `value` is always at generation granularity, ready to feed straight into
+ *   `classifyAgainstTarget` alongside `compatibility.verified`. `rawVersion`
+ *   preserves the full authoritative version string (e.g. "14.366") for
+ *   GM-facing display only — comparisons always use `value`. `hasPeerSignal`
+ *   mirrors `computeInferredLatest`'s field and is only meaningful when
+ *   `source === 'inferred'`; `isNewer` is true whenever there's positive
+ *   evidence (authoritative or peer) of a newer Foundry generation.
+ */
+export function determineComparisonTarget(results, gameRelease, options = {}) {
+  const { coreUpdate = null, gameReleaseVersion = null } = options;
+
+  // Governing: ADR-0001 Amendment — "MUST use game.data.coreUpdate.version
+  // ... when couldReachWebsite is true and version is present." Absence of
+  // either condition falls straight through to peer inference below, which
+  // is also how "couldReachWebsite: false" and "payload absent" are both
+  // handled as "unknown" rather than "you're current" (SPEC-0001 "Foundry
+  // could not reach its update service").
+  if (coreUpdate && coreUpdate.couldReachWebsite === true && coreUpdate.version != null) {
+    // Governing: ADR-0001 Amendment — compare directly against
+    // game.release.version; never gate on coreUpdate.hasUpdate.
+    const isNewer = isNewerVersion(coreUpdate.version, gameReleaseVersion ?? "");
+    return {
+      source: "authoritative",
+      value: toGeneration(coreUpdate.version),
+      rawVersion: coreUpdate.version,
+      isNewer,
+      hasPeerSignal: false,
+    };
+  }
+
+  const inferred = computeInferredLatest(results, gameRelease);
+  return {
+    source: "inferred",
+    value: inferred.value,
+    rawVersion: inferred.value,
+    isNewer: inferred.hasPeerSignal,
+    hasPeerSignal: inferred.hasPeerSignal,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Requirement: Compatibility Severity Classification
 // ---------------------------------------------------------------------------
 
@@ -102,7 +209,8 @@ function classifyAgainstTarget(maximum, verified, target) {
 /**
  * Judgment call (not fully disambiguated by SPEC-0001): a package can be
  * hard-severity against one comparison target and soft (or clean) against
- * the other, since `game.release` and `inferredLatest` are different
+ * the other, since `game.release` and the comparison target (authoritative
+ * or peer-inferred — see `determineComparisonTarget`) are different
  * targets. When they disagree, this classifier reports the *stronger*
  * claim — hard wins over soft wins over null — on the reasoning that a
  * genuine developer-declared ceiling (hard, against either target) is real
@@ -116,28 +224,34 @@ function combineSeverity(a, b) {
 }
 
 /**
- * Classifies `inferredLatest`/`game.release` severity for every package in
- * `results`. Pure and synchronous — no network calls.
+ * Classifies comparison-target/`game.release` severity for every package in
+ * `results`. Pure and synchronous — no network calls (the comparison target
+ * itself is either read from an already-supplied `coreUpdate` object or
+ * inferred from `results`, per `determineComparisonTarget` above).
  *
- * Governing: ADR-0001, ADR-0002, SPEC-0001 REQ "Inferred Latest Version",
- * SPEC-0001 REQ "Compatibility Severity Classification".
+ * Governing: ADR-0001, ADR-0002, SPEC-0001 REQ "Target Version
+ * Determination", SPEC-0001 REQ "Inferred Latest Version", SPEC-0001 REQ
+ * "Compatibility Severity Classification".
  *
  * @param {Array} results - package results from checkPackages/checkActivePackages
- * @param {string|null} gameRelease - the currently running Foundry version
- * @returns {{ inferredLatest: {value:string|null,hasPeerSignal:boolean}, packages: Array }}
+ * @param {string|null} gameRelease - the currently running Foundry generation
+ * @param {object} [options] - forwarded to `determineComparisonTarget`
+ *   (`coreUpdate`, `gameReleaseVersion`); omitting `coreUpdate` reproduces
+ *   the pre-#36 peer-inference-only behavior exactly.
+ * @returns {{ comparisonTarget: {source:'authoritative'|'inferred',value:string|null,rawVersion:string|null,isNewer:boolean,hasPeerSignal:boolean}, packages: Array }}
  *   Each package gains:
- *   - `gameReleaseComparison` / `inferredLatestComparison`:
+ *   - `gameReleaseComparison` / `targetComparison`:
  *     `{ target, verifies: boolean|null, severity: 'hard'|'soft'|null }`
  *   - `severity`: `'hard'|'soft'|null` — the stronger of the two targets'
  *     severities (see `combineSeverity` above).
  *   - `failsVerifiedCheck`: boolean — true when `verified` verifies
- *     neither `game.release` nor `inferredLatest` (SPEC-0001 "Possibly
+ *     neither `game.release` nor the comparison target (SPEC-0001 "Possibly
  *     Unmaintained Heuristic" precondition). This is distinct from
  *     `severity`: a soft-severity package still "fails" this check, it
  *     just isn't a developer-declared hard ceiling.
  */
-export function classifyPackages(results, gameRelease) {
-  const inferredLatest = computeInferredLatest(results, gameRelease);
+export function classifyPackages(results, gameRelease, options = {}) {
+  const comparisonTarget = determineComparisonTarget(results, gameRelease, options);
 
   const packages = results.map((result) => {
     const maximum = result.compatibility?.maximum ?? null;
@@ -148,35 +262,36 @@ export function classifyPackages(results, gameRelease) {
       verified,
       gameRelease ?? null
     );
-    const inferredLatestComparison =
-      inferredLatest.value != null
-        ? classifyAgainstTarget(maximum, verified, inferredLatest.value)
+    const targetComparison =
+      comparisonTarget.value != null
+        ? classifyAgainstTarget(maximum, verified, comparisonTarget.value)
         : { target: null, verifies: null, severity: null };
 
     const severity = combineSeverity(
       gameReleaseComparison.severity,
-      inferredLatestComparison.severity
+      targetComparison.severity
     );
 
     // Governing: SPEC-0001 REQ "Possibly Unmaintained Heuristic" — "fails
-    // neither game.release nor inferredLatest" read literally: game.release
-    // must resolve to a hard "no" (verifies === false), and inferredLatest
-    // must not resolve to a "yes" (covers both a hard "no" and "no target
-    // exists", i.e. no peer signal).
+    // neither game.release nor the comparison target" read literally:
+    // game.release must resolve to a hard "no" (verifies === false), and
+    // the target comparison must not resolve to a "yes" (covers both a
+    // hard "no" and "no target exists", i.e. no authoritative or peer
+    // signal).
     const failsVerifiedCheck =
       gameReleaseComparison.verifies === false &&
-      inferredLatestComparison.verifies !== true;
+      targetComparison.verifies !== true;
 
     return {
       ...result,
       gameReleaseComparison,
-      inferredLatestComparison,
+      targetComparison,
       severity,
       failsVerifiedCheck,
     };
   });
 
-  return { inferredLatest, packages };
+  return { comparisonTarget, packages };
 }
 
 // ---------------------------------------------------------------------------
@@ -327,19 +442,21 @@ export async function applyPossiblyUnmaintainedHeuristic(
 }
 
 /**
- * Full pure classification pipeline: severity (sync) + possibly-unmaintained
- * (async, network for GitHub-hosted already-failing packages only). Does
- * not read the Foundry `game` global — see `classifyActiveCompatibility`
- * below for the thin wrapper that does.
+ * Full pure classification pipeline: comparison target + severity (sync) +
+ * possibly-unmaintained (async, network for GitHub-hosted already-failing
+ * packages only). Does not read the Foundry `game` global — see
+ * `classifyActiveCompatibility` below for the thin wrapper that does.
+ * `options.coreUpdate`/`options.gameReleaseVersion` are forwarded straight
+ * through to `classifyPackages`/`determineComparisonTarget`.
  *
- * Governing: SPEC-0001 REQ "Inferred Latest Version", SPEC-0001 REQ
- * "Compatibility Severity Classification", SPEC-0001 REQ "Possibly
- * Unmaintained Heuristic".
+ * Governing: SPEC-0001 REQ "Target Version Determination", SPEC-0001 REQ
+ * "Inferred Latest Version", SPEC-0001 REQ "Compatibility Severity
+ * Classification", SPEC-0001 REQ "Possibly Unmaintained Heuristic".
  */
 export async function classifyCompatibility(results, gameRelease, options = {}) {
-  const { inferredLatest, packages } = classifyPackages(results, gameRelease);
+  const { comparisonTarget, packages } = classifyPackages(results, gameRelease, options);
   const finalPackages = await applyPossiblyUnmaintainedHeuristic(packages, options);
-  return { inferredLatest, packages: finalPackages };
+  return { comparisonTarget, packages: finalPackages };
 }
 
 // ---------------------------------------------------------------------------
@@ -380,18 +497,27 @@ async function savePreviousVersions(versions, gameInstance = globalThis.game) {
 
 /**
  * Thin wrapper: fetches (or reuses already-fetched) active-package results,
- * runs the full classification pipeline against `game.release`, and
- * persists each package's `latestVersion` to the world-scoped setting so
- * the *next* check can compare "has this manifest version changed since
- * last time" (SPEC-0001 REQ "Possibly Unmaintained Heuristic").
+ * runs the full classification pipeline against `game.release` and the
+ * comparison target (`game.data.coreUpdate` when available, else peer
+ * inference — REQ "Target Version Determination"), and persists each
+ * package's `latestVersion` to the world-scoped setting so the *next* check
+ * can compare "has this manifest version changed since last time"
+ * (SPEC-0001 REQ "Possibly Unmaintained Heuristic").
  *
- * Governing: ADR-0001, ADR-0002, SPEC-0001 REQ "Inferred Latest Version",
+ * Governing: ADR-0001 (amended 2026-08-15), ADR-0002, SPEC-0001 REQ "Target
+ * Version Determination", SPEC-0001 REQ "Inferred Latest Version",
  * SPEC-0001 REQ "Compatibility Severity Classification", SPEC-0001 REQ
  * "Possibly Unmaintained Heuristic".
  *
  * @param {object} [options]
  * @param {object} [options.game] - defaults to globalThis.game
  * @param {string} [options.gameRelease] - defaults to `game.release.generation`
+ * @param {string} [options.gameReleaseVersion] - defaults to
+ *   `game.release.version` (the full point version); used only for the
+ *   coreUpdate-vs-running "is newer" determination (ADR-0001 Amendment).
+ * @param {object|null} [options.coreUpdate] - defaults to
+ *   `game.data.coreUpdate`; reading it here issues no network request of
+ *   this module's own — Foundry's server populates it in-world.
  * @param {Array} [options.results] - pre-fetched results; when omitted, calls
  *   `checkActivePackages` (cached/concurrency-limited per issue #6)
  * @param {boolean} [options.persist] - set false to skip writing the
@@ -401,6 +527,16 @@ export async function classifyActiveCompatibility(options = {}) {
   const gameInstance = options.game ?? globalThis.game;
   const gameRelease =
     options.gameRelease ?? String(gameInstance?.release?.generation ?? "");
+  // Governing: ADR-0001 (amended 2026-08-15), SPEC-0001 REQ "Target Version
+  // Determination" — full point version, used only to decide whether
+  // coreUpdate.version is newer than what's running; every other
+  // comparison in this file stays at `gameRelease` (generation) granularity.
+  const gameReleaseVersion =
+    options.gameReleaseVersion ?? String(gameInstance?.release?.version ?? "");
+  // Governing: ADR-0001 (amended 2026-08-15) — reading game.data.coreUpdate
+  // is not a network request; Foundry's own server already populated it.
+  const coreUpdate =
+    options.coreUpdate !== undefined ? options.coreUpdate : (gameInstance?.data?.coreUpdate ?? null);
   const results =
     options.results ?? (await checkActivePackages({ game: gameInstance, ...options }));
   const previousVersions = options.previousVersions ?? loadPreviousVersions(gameInstance);
@@ -408,6 +544,8 @@ export async function classifyActiveCompatibility(options = {}) {
   const classification = await classifyCompatibility(results, gameRelease, {
     ...options,
     previousVersions,
+    gameReleaseVersion,
+    coreUpdate,
   });
 
   if (options.persist !== false) {

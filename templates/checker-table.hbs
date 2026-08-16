@@ -15,6 +15,20 @@
 
   <p class="developer-declared-note">{{developerDeclaredNote}}</p>
 
+  {{! Governing: ADR-0001 (amended 2026-08-15), SPEC-0001 REQ "Target
+      Version Determination", SPEC-0001 REQ "Inferred Latest Version" — the
+      comparison target is confirmed by Foundry itself (game.data.coreUpdate)
+      when available, otherwise inferred from other installed packages'
+      manifests. An inference is never presented as confirmed fact: the
+      "inferred" state gets its own wording and icon, never the "confirmed"
+      ones. }}
+  {{#if comparisonTarget}}
+  <p class="comparison-target-note developer-declared-note {{comparisonTarget.statusClass}}">
+    <i class="fa-solid {{comparisonTarget.iconClass}}" aria-hidden="true"></i>
+    {{comparisonTarget.note}}
+  </p>
+  {{/if}}
+
   <div class="checker-toolbar">
     <button type="button" data-action="rescan">
       <i class="fa-solid fa-arrows-rotate" aria-hidden="true"></i>

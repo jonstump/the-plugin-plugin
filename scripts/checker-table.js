@@ -95,7 +95,7 @@ export class CheckerTableApp extends HandlebarsApplicationMixin(ApplicationV2) {
     },
   };
 
-  /** @type {{inferredLatest: object, packages: Array}|null} cached classification result for this window instance. */
+  /** @type {{comparisonTarget: object, packages: Array}|null} cached classification result for this window instance. */
   #classification = null;
   #loading = false;
   #scanError = null;
@@ -162,8 +162,62 @@ export class CheckerTableApp extends HandlebarsApplicationMixin(ApplicationV2) {
       "THE-PLUGIN-PLUGIN.CheckerTable.ResultsRegionLabel"
     );
 
+    // Governing: ADR-0001 (amended 2026-08-15), SPEC-0001 REQ "Inferred
+    // Latest Version" — "MUST distinguish an authoritative target from an
+    // inferred one wherever the target version is surfaced to the GM, so an
+    // inference is never presented as fact."
+    context.comparisonTarget = this.#classification
+      ? this.#buildComparisonTargetContext(this.#classification.comparisonTarget)
+      : null;
+
     context.rows = this.#classification ? this.#buildRows(this.#classification) : [];
     return context;
+  }
+
+  /**
+   * Builds the GM-facing view-model for the current comparison target — the
+   * Foundry version every row's status is (in part) measured against beyond
+   * `game.release` — distinguishing an authoritative source
+   * (`game.data.coreUpdate`) from a peer-inferred one, per REQ "Target
+   * Version Determination" / REQ "Inferred Latest Version". `statusClass`
+   * and `iconClass` give the template a visual hook (confirmed vs. inferred)
+   * in addition to the text itself, so the distinction isn't carried by
+   * wording alone.
+   *
+   * Governing: ADR-0001 (amended 2026-08-15), SPEC-0001 REQ "Target Version
+   * Determination", SPEC-0001 REQ "Inferred Latest Version", CLAUDE.md
+   * project rule 1 (no phrasing implies a package is at fault for a target
+   * that couldn't be confirmed).
+   */
+  #buildComparisonTargetContext(comparisonTarget) {
+    if (!comparisonTarget) return null;
+
+    if (comparisonTarget.source === "authoritative") {
+      const key = comparisonTarget.isNewer
+        ? "THE-PLUGIN-PLUGIN.CheckerTable.TargetConfirmedNewer"
+        : "THE-PLUGIN-PLUGIN.CheckerTable.TargetConfirmedCurrent";
+      return {
+        statusClass: "confirmed",
+        iconClass: "fa-circle-check",
+        note: game.i18n.format(key, { version: comparisonTarget.rawVersion }),
+      };
+    }
+
+    if (comparisonTarget.hasPeerSignal) {
+      return {
+        statusClass: "inferred",
+        iconClass: "fa-circle-question",
+        note: game.i18n.format("THE-PLUGIN-PLUGIN.CheckerTable.TargetInferred", {
+          version: comparisonTarget.rawVersion,
+        }),
+      };
+    }
+
+    return {
+      statusClass: "inferred",
+      iconClass: "fa-circle-question",
+      note: game.i18n.localize("THE-PLUGIN-PLUGIN.CheckerTable.TargetNoEvidence"),
+    };
   }
 
   /**

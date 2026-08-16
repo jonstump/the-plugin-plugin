@@ -252,3 +252,48 @@ test("row loop renders no empty-row fallback text when rows is non-empty", () =>
   const html = template(baseContext({ rows: [row()], loading: true }));
   assert.ok(!html.includes("THE-PLUGIN-PLUGIN.CheckerTable.Scanning"));
 });
+
+// --- Comparison target note ---------------------------------------------
+// Governing: ADR-0001 (amended 2026-08-15), SPEC-0001 REQ "Target Version
+// Determination", SPEC-0001 REQ "Inferred Latest Version" — "MUST
+// distinguish an authoritative target from an inferred one wherever the
+// target version is surfaced to the GM, so an inference is never presented
+// as fact." `comparisonTarget` is the view-model `#buildComparisonTargetContext`
+// (scripts/checker-table.js) produces.
+
+test("comparison-target note is omitted entirely when no classification has run yet", () => {
+  const html = template(baseContext({ comparisonTarget: null }));
+  assert.ok(!html.includes("comparison-target-note"));
+});
+
+test("an authoritative comparison target renders the 'confirmed' class and note, never the 'inferred' one", () => {
+  const html = template(
+    baseContext({
+      comparisonTarget: {
+        statusClass: "confirmed",
+        iconClass: "fa-circle-check",
+        note: "Foundry confirms version 14.366 is available.",
+      },
+    })
+  );
+  assert.ok(html.includes('class="comparison-target-note developer-declared-note confirmed"'));
+  assert.ok(html.includes("fa-circle-check"));
+  assert.ok(html.includes("Foundry confirms version 14.366 is available."));
+  assert.ok(!html.includes("fa-circle-question"));
+});
+
+test("an inferred comparison target renders the 'inferred' class and note, distinguishing it from a confirmed one", () => {
+  const html = template(
+    baseContext({
+      comparisonTarget: {
+        statusClass: "inferred",
+        iconClass: "fa-circle-question",
+        note: "Foundry couldn't confirm the latest version this session, so 14 is inferred from what other installed packages declare — not confirmed.",
+      },
+    })
+  );
+  assert.ok(html.includes('class="comparison-target-note developer-declared-note inferred"'));
+  assert.ok(html.includes("fa-circle-question"));
+  assert.ok(html.includes("not confirmed"));
+  assert.ok(!html.includes("fa-circle-check"));
+});
