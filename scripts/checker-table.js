@@ -229,62 +229,74 @@ export class CheckerTableApp extends HandlebarsApplicationMixin(ApplicationV2) {
    *
    * Governing: SPEC-0001 REQ "Checker Table", SPEC-0001 "Accessibility
    * Requirements" § Icon-Only Controls.
+   *
+   * Governing: ADR-0007, SPEC-0001 REQ "Checker Table" — the active game
+   * system is still fetched and classified (its `compatibility.verified`
+   * feeds peer inference, `computeInferredLatest` in
+   * compatibility-classifier.js), but it was never meant to be rendered as
+   * its own trackable row the way a module is. Filtered out here, at the
+   * classification-to-view-model boundary, so the classification array
+   * itself (and everything upstream of it) is untouched.
    */
   #buildRows(classification) {
     const pinnedIds = getPinnedModuleIds();
-    return classification.packages.map((pkg) => {
-      const pinned = isPinned(pinnedIds, pkg.id);
-      const statusLabelKey = deriveStatusLabelKey(pkg);
-      const severityClass = deriveSeverityClass(pkg);
-      const issueLink = resolveIssueLink(pkg.links);
-      const title = pkg.title ?? pkg.id;
-      const provenanceInfo = deriveProvenanceInfo(pkg);
+    return classification.packages
+      .filter((pkg) => !pkg.isSystem)
+      .map((pkg) => {
+        const pinned = isPinned(pinnedIds, pkg.id);
+        const statusLabelKey = deriveStatusLabelKey(pkg);
+        const severityClass = deriveSeverityClass(pkg);
+        const issueLink = resolveIssueLink(pkg.links);
+        const title = pkg.title ?? pkg.id;
+        const provenanceInfo = deriveProvenanceInfo(pkg);
 
-      return {
-        id: pkg.id,
-        title,
-        installedVersion: pkg.installedVersion ?? "—",
-        latestVersion: pkg.latestVersion ?? "—",
-        verified: pkg.verified ?? "—",
-        statusLabel: game.i18n.localize(STATUS_LABEL_I18N_KEYS[statusLabelKey]),
-        statusLabelKey,
-        severityClass,
-        // Governing: SPEC-0002 REQ "Result Provenance" — null for a
-        // declared-sourced row (no marking rendered at all, per the
-        // "Declared-sourced row" scenario); the localization call belongs
-        // here rather than in checker-table-logic.js's pure
-        // `deriveProvenanceInfo`, same split already used for `statusLabel`.
-        provenance: provenanceInfo
-          ? {
-              statusClass: provenanceInfo.statusClass,
-              iconClass: provenanceInfo.iconClass,
-              note: game.i18n.localize(provenanceInfo.i18nKey),
-            }
-          : null,
-        isPinned: pinned,
-        links: {
-          url: pkg.links?.url ?? null,
-          issue: issueLink,
-          changelog: pkg.links?.changelog ?? null,
-        },
-        // Governing: SPEC-0001 "Accessibility Requirements" § Icon-Only
-        // Controls — each icon-only control gets an aria-label describing
-        // its *specific* action (e.g. "Pin lib-wrapper as a critical
-        // module"), not a generic "Pin".
-        ariaLabels: {
-          pin: game.i18n.format(
-            pinned
-              ? "THE-PLUGIN-PLUGIN.CheckerTable.AriaUnpin"
-              : "THE-PLUGIN-PLUGIN.CheckerTable.AriaPin",
-            { title }
-          ),
-          copy: game.i18n.format("THE-PLUGIN-PLUGIN.CheckerTable.AriaCopyReport", { title }),
-          url: game.i18n.format("THE-PLUGIN-PLUGIN.CheckerTable.AriaProjectPage", { title }),
-          issue: game.i18n.format("THE-PLUGIN-PLUGIN.CheckerTable.AriaReportIssue", { title }),
-          changelog: game.i18n.format("THE-PLUGIN-PLUGIN.CheckerTable.AriaChangelog", { title }),
-        },
-      };
-    });
+        return {
+          id: pkg.id,
+          title,
+          installedVersion: pkg.installedVersion ?? "—",
+          latestVersion: pkg.latestVersion ?? "—",
+          verified: pkg.verified ?? "—",
+          statusLabel: game.i18n.localize(STATUS_LABEL_I18N_KEYS[statusLabelKey]),
+          statusLabelKey,
+          severityClass,
+          // Governing: SPEC-0002 REQ "Result Provenance" — null for a
+          // declared-sourced row (no marking rendered at all, per the
+          // "Declared-sourced row" scenario); the localization call belongs
+          // here rather than in checker-table-logic.js's pure
+          // `deriveProvenanceInfo`, same split already used for `statusLabel`.
+          provenance: provenanceInfo
+            ? {
+                statusClass: provenanceInfo.statusClass,
+                iconClass: provenanceInfo.iconClass,
+                note: game.i18n.localize(provenanceInfo.i18nKey),
+              }
+            : null,
+          isPinned: pinned,
+          links: {
+            url: pkg.links?.url ?? null,
+            issue: issueLink,
+            changelog: pkg.links?.changelog ?? null,
+          },
+          // Governing: SPEC-0001 "Accessibility Requirements" § Icon-Only
+          // Controls — each icon-only control gets an aria-label describing
+          // its *specific* action (e.g. "Pin lib-wrapper as a critical
+          // module"), not a generic "Pin".
+          ariaLabels: {
+            pin: game.i18n.format(
+              pinned
+                ? "THE-PLUGIN-PLUGIN.CheckerTable.AriaUnpin"
+                : "THE-PLUGIN-PLUGIN.CheckerTable.AriaPin",
+              { title }
+            ),
+            copy: game.i18n.format("THE-PLUGIN-PLUGIN.CheckerTable.AriaCopyReport", { title }),
+            url: game.i18n.format("THE-PLUGIN-PLUGIN.CheckerTable.AriaProjectPage", { title }),
+            issue: game.i18n.format("THE-PLUGIN-PLUGIN.CheckerTable.AriaReportIssue", { title }),
+            changelog: game.i18n.format("THE-PLUGIN-PLUGIN.CheckerTable.AriaChangelog", {
+              title,
+            }),
+          },
+        };
+      });
   }
 
   /**
