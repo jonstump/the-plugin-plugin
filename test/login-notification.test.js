@@ -710,9 +710,17 @@ test("chat summary: version context — authoritative + newer generation reads a
   // with the inferred case below, which explicitly hedges ("possible
   // update ... not confirmed"). The absence of hedging language is itself
   // the confirmed/inferred distinction; the literal word "confirm" is not
-  // required here since "Update available!" already asserts it as fact.
+  // required, since stating the availability flatly already asserts it.
   assert.ok(!content.toLowerCase().includes("not confirmed"));
   assert.ok(!content.toLowerCase().includes("possible update"));
+  // The headline MUST NOT reuse the "Update available" status label. That
+  // label counts *modules* with newer releases in the list directly below
+  // this line, so reusing the phrase here makes a statement about the
+  // Foundry core version read as a summary of the module results — the
+  // opposite of what the version-context line exists to convey.
+  // Asserted on `expected` (the line alone), not `content`, because the
+  // status list legitimately contains that label.
+  assert.ok(!expected.toLowerCase().includes("update available"));
 });
 
 test("chat summary: version context — authoritative + already current reads as confirmed, distinct wording from 'newer'", async () => {

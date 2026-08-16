@@ -46,7 +46,7 @@
   "THE-PLUGIN-PLUGIN.Settings.NotificationFrequency.Choices.OnlyWhenChanged": "Only when results changed",
   "THE-PLUGIN-PLUGIN.LoginNotification.ResultsHeading": "Checked {total} active package(s):",
   "THE-PLUGIN-PLUGIN.LoginNotification.StatusCountItem": "{label}: {count}",
-  "THE-PLUGIN-PLUGIN.LoginNotification.VersionContextConfirmedNewer": "Update available! Current {runningVersion} → {targetVersion}",
+  "THE-PLUGIN-PLUGIN.LoginNotification.VersionContextConfirmedNewer": "Foundry {targetVersion} available — you're on {runningVersion}",
   "THE-PLUGIN-PLUGIN.LoginNotification.VersionContextConfirmedCurrent": "Foundry confirms {runningVersion} is up to date",
   "THE-PLUGIN-PLUGIN.LoginNotification.VersionContextInferred": "Foundry {runningVersion} — possible update to {targetVersion}, not confirmed",
   "THE-PLUGIN-PLUGIN.LoginNotification.VersionContextNoEvidence": "Foundry {runningVersion} — no newer version detected",
