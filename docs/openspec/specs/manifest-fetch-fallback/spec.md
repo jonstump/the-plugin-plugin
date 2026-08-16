@@ -166,12 +166,15 @@ The system SHALL include `compatibility.verified` values obtained via the
 fallback when computing `inferredLatest` (SPEC-0001 REQ "Inferred Latest
 Version").
 
-Excluding them would preserve the failure this capability exists to fix:
-with most manifests unreachable, `inferredLatest` resolves to `null` and
-ADR-0001's inference never runs. Including them is consistent with
-ADR-0001, which already frames `inferredLatest` as advisory inference
-rather than ground truth, and with ADR-0002, which gates severity
-escalation on `compatibility.maximum` rather than on `verified` alone.
+`inferredLatest` is the fallback comparison target, used when no
+authoritative target is available from `game.data.coreUpdate` (SPEC-0001
+REQ "Target Version Determination"). Excluding fallback-sourced values
+would make that fallback depend on which packages happened to have
+CORS-friendly manifest URLs — a property unrelated to how current those
+packages are. Including them is consistent with ADR-0001, which frames
+`inferredLatest` as advisory inference rather than ground truth, and with
+ADR-0002, which gates severity escalation on `compatibility.maximum`
+rather than on `verified` alone.
 
 - Fallback-sourced `verified` values MUST participate in the
   `inferredLatest` computation on the same terms as declared-sourced
