@@ -112,11 +112,17 @@ Measured against the seven packages in the real test world:
 |---|---|---|
 | `multilevel-tokens` | `raw.githubusercontent.com` | already succeeded, untouched |
 | `lib-wrapper` | GitHub release asset | recovered — `version 1.13.5.1`, `verified 14` |
-| `smarttarget` | GitHub release asset | recovered — `version 0.5.1`, `verified 14` |
+| `smarttarget` | GitHub release asset | recovered — `version 0.5.1`, `verified 14` [†](#amendment--2026-08-16) |
 | `the-plugin-plugin` | GitHub release asset | recovered — `version 0.1.0`, `verified 13` |
 | `sfrpg` (system) | GitHub release asset | still fails (404 — `system.json` is built into `dist/`, absent from the repo root) |
 | `pings` | GitLab job artifact | still fails (not GitHub; no equivalent raw path) |
 | `settings-extender` | GitLab job artifact | still fails (same) |
+
+† **`smarttarget`'s `version 0.5.1` is the value that later triggered the
+2026-08-16 amendment.** Its actual released version is `4.0.0`; the `0.5.1`
+committed to the default branch is a stale placeholder. Only the
+`verified 14` half of that row was a genuine recovery. Row left as
+originally measured; see [Amendment](#amendment--2026-08-16).
 
 Coverage moves from **1/7 to 4/7**. That is a partial fix, deliberately
 adopted as such.
@@ -162,6 +168,14 @@ was never wrong; it was starved of input.
   trade-off prove unacceptable in practice.
 
 ### Confirmation
+
+> **Extended by the [2026-08-16 amendment](#amendment--2026-08-16).** The
+> reasoning below treats "`HEAD` may be ahead of any release" as the risk,
+> and marking provenance as the mitigation. Both proved insufficient: the
+> skew is bidirectional, and a correctly-marked row still reported a
+> version older than the installed one. The amendment's own Confirmation
+> adds the rejections that follow from that; the four bullets below remain
+> in force.
 
 A result obtained via the fallback MUST be distinguishable from one
 obtained via the package's own declared URL, both in the data model and to
