@@ -671,11 +671,11 @@ async function postChatSummary(
 
   const content = [
     `<div class="the-plugin-plugin-login-summary">`,
+    `<p class="the-plugin-plugin-version-context">${versionContextNote}</p>`,
     `<p>${i18n.format("THE-PLUGIN-PLUGIN.LoginNotification.ResultsHeading", {
       total: summary.total,
     })}</p>`,
     `<ul class="the-plugin-plugin-status-list">${statusItems}</ul>`,
-    `<p class="the-plugin-plugin-version-context">${versionContextNote}</p>`,
     pinnedSection,
     `<button type="button" data-action="${CHECKER_OPEN_ACTION}">${i18n.localize(
       "THE-PLUGIN-PLUGIN.LoginNotification.OpenChecker"

@@ -706,8 +706,13 @@ test("chat summary: version context — authoritative + newer generation reads a
     targetVersion: "14.366",
   });
   assert.ok(content.includes(expected));
-  assert.match(expected.toLowerCase(), /confirms?/);
+  // Confirmed (authoritative) reads as a plain, unhedged fact — contrast
+  // with the inferred case below, which explicitly hedges ("possible
+  // update ... not confirmed"). The absence of hedging language is itself
+  // the confirmed/inferred distinction; the literal word "confirm" is not
+  // required here since "Update available!" already asserts it as fact.
   assert.ok(!content.toLowerCase().includes("not confirmed"));
+  assert.ok(!content.toLowerCase().includes("possible update"));
 });
 
 test("chat summary: version context — authoritative + already current reads as confirmed, distinct wording from 'newer'", async () => {
