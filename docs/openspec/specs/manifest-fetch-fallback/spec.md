@@ -37,6 +37,11 @@ implementation niceties:
 - REQ "Fallback Field Trust" — marking alone proved insufficient, because a
   correctly-marked row can still carry a wrong value. Fields whose
   reliability does not survive the default-branch read are not used at all.
+- REQ "Release Tag Resolution" (ADR-0003 Amendment 2, 2026-08-16) — before
+  accepting the default-branch read's reduced trust, the system first
+  tries to resolve the package's actual latest release and read the
+  manifest there instead, within a rate-limit budget shared with
+  SPEC-0001's "possibly unmaintained" check.
 
 This spec uses "comparison target" and `inferredLatest` per SPEC-0001's
 Overview terminology note: `inferredLatest` is specifically the
@@ -126,9 +131,12 @@ every package the fallback cannot serve.
   than `github.com`.
 - The system MUST treat a non-200 response from the fallback URL as a
   terminal failure for that package, with no further attempts.
-- The system MUST NOT contact the GitHub API as part of this fallback, so
-  that the unauthenticated rate-limit budget remains available to
-  SPEC-0001 REQ "Possibly Unmaintained Heuristic".
+- The system MAY contact the GitHub API as part of resolving a package's
+  fallback, per REQ "Release Tag Resolution" (ADR-0003 Amendment 2,
+  2026-08-16) — but only within the shared rate-limit budget that
+  requirement defines, which also governs SPEC-0001 REQ "Possibly
+  Unmaintained Heuristic"'s own GitHub API usage. Neither consumer may
+  spend the budget independently of the other.
 
 #### Scenario: Non-GitHub host
 
@@ -145,6 +153,78 @@ every package the fallback cannot serve.
 - **WHEN** a package's manifest is a build artifact not committed to the
   repository root, so the derived fallback URL returns 404
 - **THEN** the system records "Couldn't check" for that package
+
+### Requirement: Release Tag Resolution
+
+Before falling back to a raw/default-branch read, the system SHALL attempt
+to resolve the package's actual latest release and read the manifest at
+that release, per ADR-0003 Amendment 2 (2026-08-16).
+
+- WHEN a package's declared URL fails and its fallback URL is
+  GitHub-hosted, the system SHALL first call
+  `GET /repos/{owner}/{repo}/releases/latest`, subject to the shared
+  rate-limit budget below.
+- WHEN that call resolves a `tag_name`, the system SHALL fetch the
+  manifest from `raw.githubusercontent.com/{owner}/{repo}/{tag_name}/
+  {filename}` (the same filename-derivation rule as REQ "Fallback URL
+  Derivation").
+- WHEN that fetch succeeds, the system SHALL treat both `version` and
+  `compatibility.verified` as trustworthy — this is the package's actual
+  released manifest, not a default-branch read — and MUST record the
+  result's provenance as `release`, distinct from `declared` and
+  `fallback`.
+- WHEN the release-tag lookup fails for any reason (no releases published,
+  non-200/network error, rate-limited, or budget exhausted), OR the
+  tag-resolved fetch itself fails, the system MUST fall through to the
+  existing raw/HEAD fallback (REQ "Fallback URL Derivation") unchanged.
+  This path MUST NOT surface as an additional error beyond what the
+  raw/HEAD fallback already reports.
+- **Rate-limit budget**: the system MUST maintain a single counter shared
+  between this requirement's `api.github.com` calls and SPEC-0001 REQ
+  "Possibly Unmaintained Heuristic"'s `archived`/`pushed_at` lookups,
+  scoped to one classification run (not persisted across scans). Each
+  consumer MUST decrement the shared counter before making a call and MUST
+  skip the call — falling through to that consumer's existing non-API
+  behavior — once the counter reaches zero. The budget is best-effort: it
+  bounds how much of the pool this module spends *proactively* in one
+  scan, not a guarantee against real GitHub-side rate-limiting, which
+  MUST continue to degrade through the standard per-package error-handling
+  path (REQ "Error Handling Standards") rather than a new failure mode.
+- The system MUST NOT contact `api.github.com` for a package whose
+  declared URL already succeeded, or whose fallback URL is not
+  GitHub-hosted.
+
+#### Scenario: Real release exists
+
+- **WHEN** a package's declared URL fails, its fallback URL is
+  GitHub-hosted, and `releases/latest` resolves a tag whose manifest fetch
+  succeeds
+- **THEN** the system uses that manifest's `version` and
+  `compatibility.verified` as trustworthy, provenance `release`
+
+#### Scenario: No releases published
+
+- **WHEN** a package's declared URL fails and `releases/latest` returns a
+  non-200 response (e.g. no releases exist yet)
+- **THEN** the system falls through to the raw/HEAD fallback unchanged,
+  provenance `fallback`, `version` treated as unknown per REQ "Fallback
+  Field Trust"
+
+#### Scenario: Shared budget exhausted
+
+- **WHEN** the shared rate-limit budget counter has reached zero, whether
+  from this requirement's own calls or from REQ "Possibly Unmaintained
+  Heuristic"'s calls earlier in the same scan
+- **THEN** the system does not attempt release-tag resolution for any
+  remaining package in that scan, falling through directly to the
+  raw/HEAD fallback for each
+
+#### Scenario: Tag-resolved fetch itself fails
+
+- **WHEN** `releases/latest` resolves a tag but the manifest fetch at that
+  tag fails (network error, non-200, malformed JSON)
+- **THEN** the system falls through to the raw/HEAD fallback unchanged,
+  rather than reporting a separate error for the tag-resolution attempt
 
 ### Requirement: Result Provenance
 
@@ -164,9 +244,16 @@ row can still carry a wrong value. Which fields may be used at all is
 governed by REQ "Fallback Field Trust".
 
 - Each resolved package result MUST carry a provenance value distinguishing
-  `declared` from `fallback`.
-- The checker table MUST visually distinguish a fallback-sourced row from a
-  declared-sourced row.
+  `declared`, `fallback` (raw/HEAD, `version` unknown per REQ "Fallback
+  Field Trust"), and `release` (resolved via REQ "Release Tag Resolution"
+  — an actual released manifest, `version` and `compatibility.verified`
+  both trustworthy).
+- The checker table MUST visually distinguish a `fallback`-sourced row from
+  a `declared`-sourced row. A `release`-sourced row MUST NOT carry that
+  same marking — its data is exactly as trustworthy as `declared`, and
+  marking it as uncertain would misrepresent it — but MAY carry a neutral,
+  non-alarming indicator naming the resolution path, for transparency
+  rather than caveat.
 - The system MUST NOT label a fallback-sourced version with wording that
   asserts it is the latest published or released version.
 - The system MUST NOT use language implying a package is behind, neglected,
@@ -174,9 +261,15 @@ governed by REQ "Fallback Field Trust".
 
 #### Scenario: Fallback-sourced row
 
-- **WHEN** a package's data was obtained via the fallback URL
+- **WHEN** a package's data was obtained via the raw/HEAD fallback URL
 - **THEN** the checker table marks that row as sourced from the
   repository's default branch rather than a published release
+
+#### Scenario: Release-sourced row
+
+- **WHEN** a package's data was obtained via REQ "Release Tag Resolution"
+- **THEN** the row carries no "uncertain" fallback marking — its data is
+  as trustworthy as a declared-sourced row
 
 #### Scenario: Declared-sourced row
 
@@ -210,8 +303,11 @@ hand-edited in that same committed file and does not share this defect.
   plausibility check such as "only when newer than the installed version" —
   a stale placeholder that happens to be higher passes such a check and
   still reports wrongly.
-- These constraints apply only to fallback-sourced results. A
-  declared-sourced `version` is the released version and is used unchanged.
+- These constraints apply only to **`fallback`-provenance** results (the
+  raw/HEAD read). A `declared`-sourced `version` is the released version
+  and is used unchanged; a `release`-sourced `version` (REQ "Release Tag
+  Resolution") is also the released version, obtained via a different
+  resolution path, and is likewise used unchanged.
 
 #### Scenario: Fallback version older than installed
 
