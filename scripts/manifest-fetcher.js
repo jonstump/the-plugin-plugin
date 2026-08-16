@@ -147,12 +147,30 @@ function buildOkResult(pkg, manifest, provenance = "declared") {
   // Governing: SPEC-0001 REQ "Manifest Check" — fall back to the legacy
   // compatibleCoreVersion field when `compatibility` is absent.
   const verified = rawVerified ?? compatibleCoreVersion ?? null;
-  const latestVersion = manifest?.version ?? null;
+
+  // Governing: ADR-0003 (amended 2026-08-16), SPEC-0002 REQ "Fallback Field
+  // Trust" (issue #48) — a fallback-sourced `version` is read from a
+  // repository's default branch, which is frequently stamped by release
+  // tooling and can sit arbitrarily far from what was actually released, in
+  // EITHER direction (observed real case: installed 0.9.8, fallback-sourced
+  // `version` 0.5.1, actual latest release 4.0.0 — a stale placeholder that
+  // happened to read *older*, producing a false "up to date"). It MUST be
+  // treated as unknown for a fallback-sourced result: never surfaced as the
+  // latest version, and never used to derive an update-available verdict —
+  // not even behind a plausibility check like "only if newer than
+  // installed", since a stale-but-numerically-higher placeholder would still
+  // pass that check and still misreport. `compatibility.verified` (folded
+  // into `verified` above) does not share this defect and continues to be
+  // used unconditionally, regardless of provenance. A declared-sourced
+  // `version` is the actual released version and is used exactly as before.
+  const latestVersion = provenance === "fallback" ? null : manifest?.version ?? null;
 
   const updateAvailable =
-    latestVersion != null && pkg.installedVersion != null
-      ? isNewerVersion(latestVersion, pkg.installedVersion)
-      : null; // unknown — not enough data to compare
+    provenance === "fallback"
+      ? null
+      : latestVersion != null && pkg.installedVersion != null
+        ? isNewerVersion(latestVersion, pkg.installedVersion)
+        : null; // unknown — not enough data to compare
 
   return {
     id: pkg.id,

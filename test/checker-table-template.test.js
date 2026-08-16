@@ -315,6 +315,56 @@ test("the provenance marking introduces no new aria-live region (Accessibility R
   assert.equal(ariaLiveCount, 1);
 });
 
+test("the provenance badge carries an aria-label naming the source specifically, in addition to the visible text (Accessibility Requirements, issue #48)", () => {
+  const html = template(
+    baseContext({
+      rows: [
+        row({
+          provenance: {
+            statusClass: "fallback",
+            iconClass: "fa-code-branch",
+            note: "Read from the repository's default branch, not a published release.",
+          },
+        }),
+      ],
+    })
+  );
+  const badgeMatch = html.match(/<span class="provenance-badge[^>]*>/);
+  assert.ok(badgeMatch, "expected a provenance-badge span in the output");
+  assert.match(badgeMatch[0], /aria-label="/);
+  // The aria-label reuses the exact ProvenanceFallbackNote content already
+  // rendered as visible text — no new wording introduced.
+  assert.ok(
+    badgeMatch[0].includes(
+      "aria-label=\"Read from the repository&#x27;s default branch, not a published release.\""
+    ) ||
+      badgeMatch[0].includes(
+        "aria-label=\"Read from the repository's default branch, not a published release.\""
+      )
+  );
+});
+
+test("a fallback-sourced row with unknown latestVersion renders the unknown marker ('—') in the Latest cell, not a stale figure (SPEC-0002 REQ \"Fallback Field Trust\", issue #48)", () => {
+  // Matches the exact shape scripts/checker-table.js's #buildRows produces
+  // once manifest-fetcher.js returns latestVersion: null for a
+  // fallback-sourced result (`pkg.latestVersion ?? "—"`).
+  const html = template(
+    baseContext({
+      rows: [
+        row({
+          latestVersion: "—",
+          provenance: {
+            statusClass: "fallback",
+            iconClass: "fa-code-branch",
+            note: "Read from the repository's default branch, not a published release.",
+          },
+        }),
+      ],
+    })
+  );
+  assert.ok(/<td class="col-latest">\s*—\s*<\/td>/.test(html));
+});
+
 test("the provenance marking is not an interactive/focusable element (no new focus stop)", () => {
   const html = template(
     baseContext({

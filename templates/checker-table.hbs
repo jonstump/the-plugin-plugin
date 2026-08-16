@@ -74,17 +74,22 @@
           </td>
           <td class="col-package">
             {{row.title}}
-            {{! Governing: SPEC-0002 REQ "Result Provenance" — a
-                fallback-sourced row (ADR-0003: read from the repository's
+            {{! Governing: SPEC-0002 REQ "Result Provenance", SPEC-0002
+                Accessibility Requirements § Icon-Only Controls (issue #48) —
+                a fallback-sourced row (ADR-0003: read from the repository's
                 default branch, not a published release) is visually
                 distinguished here; a declared-sourced row (row.provenance is
-                null) renders no marking at all. The source is named in
-                visible text (not an icon-only mark), so this satisfies the
-                Accessibility Requirements' "text alternative naming the
-                source specifically" / "MUST NOT rely on colour, position, or
-                shape alone" without any extra aria-label. }}
+                null) renders no marking at all. The source is already named
+                in visible text, so this isn't an icon-only control and isn't
+                an outright violation without an aria-label — but the
+                accessibility requirement asks for a text alternative naming
+                the source specifically, so the outer span carries an
+                explicit aria-label with that same text (row.provenance.note
+                — the same ProvenanceFallbackNote content rendered visibly,
+                not new wording), rather than leaving the accessible name to
+                be assembled implicitly from the icon + text children. }}
             {{#if row.provenance}}
-            <span class="provenance-badge {{row.provenance.statusClass}}">
+            <span class="provenance-badge {{row.provenance.statusClass}}" aria-label="{{row.provenance.note}}">
               <i class="fa-solid {{row.provenance.iconClass}}" aria-hidden="true"></i>
               {{row.provenance.note}}
             </span>

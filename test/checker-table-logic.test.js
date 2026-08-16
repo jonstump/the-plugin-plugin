@@ -73,6 +73,35 @@ test("deriveStatusLabelKey: up to date & verified is the default", () => {
   assert.equal(deriveStatusLabelKey(pkg), STATUS_LABEL_KEYS.UP_TO_DATE);
 });
 
+// --- Unknown update availability (issue #48, SPEC-0002 REQ "Fallback Field
+// Trust") — manifest-fetcher.js now returns `updateAvailable: null` (never
+// `false`) for a fallback-sourced result whose `version` can't be trusted.
+// `if (pkg.updateAvailable)` alone is falsy for both `null` and `false`, so
+// without this precedence change an otherwise-clean fallback-sourced row
+// would silently fall through to "Up to date & verified" — the exact false
+// claim this issue exists to stop (real case: installed 0.9.8,
+// fallback-sourced `version` 0.5.1, actual latest release 4.0.0). See the
+// judgment-call note above `deriveStatusLabelKey` for why "Couldn't check"
+// was chosen over the other three remaining labels.
+
+test("deriveStatusLabelKey: unknown update availability (updateAvailable === null) with nothing else wrong resolves to Couldn't check, never Up to date (issue #48 judgment call)", () => {
+  const pkg = okPkg({ updateAvailable: null, latestVersion: null, provenance: "fallback" });
+  assert.equal(deriveStatusLabelKey(pkg), STATUS_LABEL_KEYS.COULDNT_CHECK);
+});
+
+test("deriveStatusLabelKey: a known, confirmed non-update (updateAvailable === false) still resolves to Up to date & verified — only null (unknown) triggers Couldn't check, not false", () => {
+  const pkg = okPkg({ updateAvailable: false });
+  assert.equal(deriveStatusLabelKey(pkg), STATUS_LABEL_KEYS.UP_TO_DATE);
+});
+
+test("deriveStatusLabelKey: unknown update availability does not override possibly-unmaintained or severity precedence", () => {
+  const unmaintained = okPkg({ updateAvailable: null, possiblyUnmaintained: true });
+  assert.equal(deriveStatusLabelKey(unmaintained), STATUS_LABEL_KEYS.POSSIBLY_UNMAINTAINED);
+
+  const severe = okPkg({ updateAvailable: null, severity: "hard" });
+  assert.equal(deriveStatusLabelKey(severe), STATUS_LABEL_KEYS.NOT_YET_VERIFIED);
+});
+
 test("deriveStatusLabelKey: treats a missing/null package as couldn't check", () => {
   assert.equal(deriveStatusLabelKey(null), STATUS_LABEL_KEYS.COULDNT_CHECK);
   assert.equal(deriveStatusLabelKey(undefined), STATUS_LABEL_KEYS.COULDNT_CHECK);

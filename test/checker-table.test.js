@@ -235,6 +235,78 @@ test("comparisonTarget: inferred with peer signal maps to the 'inferred' view-mo
   assert.notEqual(secondContext.comparisonTarget.iconClass, "fa-circle-check");
 });
 
+// ---------------------------------------------------------------------------
+// Fallback Field Trust: end-to-end regression for the reported bug (issue
+// #48, SPEC-0002 REQ "Fallback Field Trust", ADR-0003 amended 2026-08-16).
+//
+// This is the one test in the whole PR that exercises the real bug
+// end-to-end: manifest-fetcher.js's fallback path -> compatibility-
+// classifier.js's severity/unmaintained classification ->
+// checker-table-logic.js's deriveStatusLabelKey -> checker-table.js's
+// #buildRows, the same call chain a real render cycle drives. Everything
+// upstream and downstream of that chain is exercised in isolation
+// elsewhere (manifest-fetcher.test.js, checker-table-logic.test.js); this
+// test's job is only to prove the pieces compose correctly for the exact
+// reported scenario, using `runComparisonTargetScenario`'s
+// `_prepareContext`-driven harness (declared above) so it observes the same
+// `context.rows` a real window render would.
+// ---------------------------------------------------------------------------
+
+test("a fallback-sourced, otherwise-clean package (installed 0.9.8, fallback version 0.5.1, verified passing) does NOT render as 'Up to date & verified' (issue #48 regression)", async () => {
+  const { secondContext } = await runComparisonTargetScenario((game) => {
+    // No game.data.coreUpdate — falls to peer inference, which finds no
+    // signal here (the only package's `verified` matches the running
+    // generation, not ahead of it), matching the real reported scenario
+    // where the comparison target itself wasn't the issue.
+    game.release = { generation: "13", version: "13.351", build: 351 };
+    game.modules = [
+      {
+        id: "smarttarget-fallback-unknown-update",
+        title: "Smart Target",
+        active: true,
+        version: "0.9.8",
+        manifest:
+          "https://github.com/theripper93/Smart-Target/releases/latest/download/module.json",
+      },
+    ];
+    globalThis.fetch = async (url) => {
+      if (url.includes("raw.githubusercontent.com")) {
+        // Governing: ADR-0003's 2026-08-16 amendment — the real observed
+        // Smart-Target row: a stale committed `version` (0.5.1, older than
+        // the installed 0.9.8 and nowhere near the actual 4.0.0 release),
+        // paired with a `compatibility.verified` that DOES verify the
+        // running generation, so nothing else about this row is wrong.
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ version: "0.5.1", compatibility: { verified: "13" } }),
+        };
+      }
+      // Declared URL (a GitHub release-asset link) always CORS-fails,
+      // triggering the raw.githubusercontent.com fallback.
+      throw new TypeError("Failed to fetch");
+    };
+  });
+
+  const row = secondContext.rows.find((r) => r.id === "smarttarget-fallback-unknown-update");
+  assert.ok(row, "expected the fallback-sourced package's row to be present");
+
+  // The actual regression: this row must not read as confidently current.
+  assert.notEqual(row.statusLabelKey, "upToDate");
+  assert.notEqual(row.statusLabel, "THE-PLUGIN-PLUGIN.Status.UpToDate");
+  // And per the judgment call documented in checker-table-logic.js, it
+  // reads as "Couldn't check" rather than any of the other three remaining
+  // labels.
+  assert.equal(row.statusLabelKey, "couldntCheck");
+  assert.equal(row.statusLabel, "THE-PLUGIN-PLUGIN.Status.CouldntCheck");
+
+  // The unknown `version` must never be surfaced as a latest-version figure.
+  assert.equal(row.latestVersion, "—");
+  // Provenance marking is still present — this is a fallback-sourced row.
+  assert.ok(row.provenance, "expected a provenance marking on a fallback-sourced row");
+  assert.equal(row.provenance.statusClass, "fallback");
+});
+
 test("comparisonTarget: inferred with no peer evidence maps to the 'inferred' view-model with the no-evidence wording", async () => {
   const { secondContext } = await runComparisonTargetScenario((game) => {
     // No coreUpdate, no modules at all — nothing to infer from.
