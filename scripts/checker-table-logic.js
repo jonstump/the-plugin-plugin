@@ -66,10 +66,32 @@ export const STATUS_LABEL_I18N_KEYS = Object.freeze({
  *      treated as more important to surface than a routine version bump,
  *      since the fetched manifest already reflects the latest published
  *      version's own declared compatibility fields.
- *   4. Update available.
- *   5. Up to date & verified — the default when nothing else applies.
+ *   4. Update available — `pkg.updateAvailable === true`.
+ *   5. Couldn't check (again) — `pkg.updateAvailable === null` (unknown,
+ *      never `false`). Second judgment call, made explicit here (issue #48,
+ *      SPEC-0002 REQ "Fallback Field Trust"): manifest-fetcher.js now
+ *      returns `updateAvailable: null` for a fallback-sourced result (ADR-0003
+ *      as amended 2026-08-16 — a fallback-sourced `version` is not
+ *      trustworthy enough to compare, in either direction). SPEC-0002 only
+ *      requires that an unknown-availability row not read as "up to date"
+ *      and use one of the four remaining labels — it does not prescribe
+ *      which. This picks "Couldn't check" over the other three candidates:
+ *      update availability is the single most central signal this module
+ *      exists to report, so a package for which it genuinely could not be
+ *      determined is, in the sense that matters most to a GM, a package this
+ *      check could not complete — even though `compatibility.verified` (a
+ *      separate, still-trusted signal) is shown in its own column
+ *      regardless of status label, so nothing informational is lost by this
+ *      choice. "Couldn't check" already carries exactly this "we don't have
+ *      full information" meaning elsewhere in the taxonomy (full fetch
+ *      failure, step 1 above), so reusing it here does not introduce a new
+ *      meaning for GMs to learn.
+ *   6. Up to date & verified — the default when nothing else applies, i.e.
+ *      `pkg.updateAvailable === false` (a known, confirmed non-update) and
+ *      every earlier condition is clear.
  *
- * Governing: SPEC-0001 REQ "Checker Table", ADR-0002.
+ * Governing: SPEC-0001 REQ "Checker Table", SPEC-0002 REQ "Fallback Field
+ * Trust" (issue #48), ADR-0002, ADR-0003 (amended 2026-08-16).
  */
 export function deriveStatusLabelKey(pkg) {
   if (!pkg || pkg.status === "error" || pkg.error) {
@@ -83,6 +105,15 @@ export function deriveStatusLabelKey(pkg) {
   }
   if (pkg.updateAvailable) {
     return STATUS_LABEL_KEYS.UPDATE_AVAILABLE;
+  }
+  // Governing: SPEC-0002 REQ "Fallback Field Trust" (issue #48) — unknown
+  // update availability (`null`, as manifest-fetcher.js now returns for
+  // every fallback-sourced result) MUST NOT fall through to "Up to date &
+  // verified" below; only a known `false` (an actual, comparable non-update)
+  // does. See the judgment-call note above the function for why "Couldn't
+  // check" was chosen over the other three remaining labels.
+  if (pkg.updateAvailable == null) {
+    return STATUS_LABEL_KEYS.COULDNT_CHECK;
   }
   return STATUS_LABEL_KEYS.UP_TO_DATE;
 }

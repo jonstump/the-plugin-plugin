@@ -256,7 +256,98 @@ test("fetchPackageManifest falls back exactly once when the declared github.com 
   ]);
   assert.equal(result.status, "ok");
   assert.equal(result.provenance, "fallback");
-  assert.equal(result.latestVersion, "2.0.0");
+  // Governing: ADR-0003 (amended 2026-08-16), SPEC-0002 REQ "Fallback Field
+  // Trust" (issue #48) — a fallback-sourced `version` is unknown, full stop,
+  // even though "2.0.0" is numerically newer than the installed "1.0.0" and
+  // would pass a naive "only trust it if it looks like an update" check.
+  // `compatibility.verified` is still trusted from the same fallback
+  // manifest.
+  assert.equal(result.latestVersion, null);
+  assert.equal(result.updateAvailable, null);
+  assert.equal(result.verified, "14");
+});
+
+// --- Fallback Field Trust: `version` is unknown regardless of skew direction
+// (issue #48, ADR-0003 amended 2026-08-16, SPEC-0002 REQ "Fallback Field
+// Trust") -------------------------------------------------------------------
+
+test("fetchPackageManifest: a fallback-sourced version OLDER than installed is unknown, not 'up to date' (the reported false-negative)", async () => {
+  // Governing: ADR-0003's 2026-08-16 amendment "Smart-Target" case —
+  // installed 0.9.8, fallback-sourced `version` reads 0.5.1 (a stale
+  // placeholder from the repo's default branch), actual latest release was
+  // 4.0.0. Before this fix, `isNewerVersion("0.5.1", "0.9.8")` is false, so
+  // `updateAvailable` came back `false` and the GM was told they were
+  // current while three major versions behind.
+  const pkg = {
+    id: "smarttarget",
+    title: "Smart Target",
+    manifestUrl:
+      "https://github.com/theripper93/Smart-Target/releases/latest/download/module.json",
+    installedVersion: "0.9.8",
+  };
+  const fetchImpl = async (url) => {
+    if (url.includes("raw.githubusercontent.com")) {
+      return okResponse({ version: "0.5.1", compatibility: { verified: "14" } });
+    }
+    throw new TypeError("Failed to fetch");
+  };
+
+  const result = await fetchPackageManifest(pkg, { fetchImpl });
+
+  assert.equal(result.status, "ok");
+  assert.equal(result.provenance, "fallback");
+  assert.equal(result.latestVersion, null);
+  assert.equal(result.updateAvailable, null);
+  // compatibility.verified is unaffected by this fix — still trusted.
+  assert.equal(result.verified, "14");
+});
+
+test("fetchPackageManifest: a fallback-sourced version NEWER than installed is still unknown — not evidence of a real update (plausibility check explicitly rejected)", async () => {
+  // Governing: SPEC-0002 REQ "Fallback Field Trust" — "MUST NOT gate ... on
+  // a plausibility check such as 'only when newer than the installed
+  // version' — a stale placeholder that happens to be higher passes such a
+  // check and still reports wrongly." This covers the direction the
+  // plausibility-check shortcut would otherwise let through unnoticed.
+  const pkg = {
+    id: "some-other-mod",
+    title: "Some Other Mod",
+    manifestUrl: "https://github.com/owner/some-other-mod/releases/latest/download/module.json",
+    installedVersion: "1.0.0",
+  };
+  const fetchImpl = async (url) => {
+    if (url.includes("raw.githubusercontent.com")) {
+      return okResponse({ version: "9.9.9", compatibility: { verified: "14" } });
+    }
+    throw new TypeError("Failed to fetch");
+  };
+
+  const result = await fetchPackageManifest(pkg, { fetchImpl });
+
+  assert.equal(result.status, "ok");
+  assert.equal(result.provenance, "fallback");
+  assert.equal(result.latestVersion, null);
+  assert.equal(result.updateAvailable, null);
+});
+
+test("fetchPackageManifest: a declared-sourced result is unaffected by Fallback Field Trust (regression guard, issue #48)", async () => {
+  // The declared manifest URL succeeds on the first attempt here, so no
+  // fallback is ever reached — `version`/`updateAvailable` must be derived
+  // exactly as before this fix.
+  const pkg = {
+    id: "well-behaved-mod",
+    title: "Well Behaved Mod",
+    manifestUrl: "https://example.com/well-behaved-mod.json",
+    installedVersion: "1.0.0",
+  };
+  const fetchImpl = async () =>
+    okResponse({ version: "1.5.0", compatibility: { verified: "13" } });
+
+  const result = await fetchPackageManifest(pkg, { fetchImpl });
+
+  assert.equal(result.status, "ok");
+  assert.equal(result.provenance, "declared");
+  assert.equal(result.latestVersion, "1.5.0");
+  assert.equal(result.updateAvailable, true);
 });
 
 test("fetchPackageManifest reports Couldn't check with a both-attempts diagnostic when declared and fallback both fail", async () => {
