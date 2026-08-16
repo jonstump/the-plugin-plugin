@@ -27,8 +27,16 @@ unchanged.
 
 Because the fallback reads a repository's default branch rather than its
 released tag, the data it produces is **not** equivalent to the data the
-declared URL would have returned. Distinguishing the two is a requirement
-of this spec, not an implementation nicety — see REQ "Result Provenance".
+declared URL would have returned — and can differ in either direction.
+This spec addresses that in two ways, both requirements rather than
+implementation niceties:
+
+- REQ "Result Provenance" — the source of every resolved result is recorded
+  and surfaced, so fallback-sourced data is never mistaken for released
+  data.
+- REQ "Fallback Field Trust" — marking alone proved insufficient, because a
+  correctly-marked row can still carry a wrong value. Fields whose
+  reliability does not survive the default-branch read are not used at all.
 
 This spec uses "comparison target" and `inferredLatest` per SPEC-0001's
 Overview terminology note: `inferredLatest` is specifically the
