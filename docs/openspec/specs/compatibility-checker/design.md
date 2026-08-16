@@ -199,6 +199,10 @@ Foundry version and the active comparison target, and names any pinned
 module that is not clean. It does not repeat the checker window's volunteer
 reminder.
 
+> "Pinned" throughout this document is the same feature the GM-facing text
+> calls "starred" — see spec.md's Terminology block for why the two nouns
+> differ and why the identifiers were not renamed.
+
 **Rationale**: The two surfaces have different jobs, and the original
 notification blurred them. It packed every count into one prose sentence
 (unreadable at a glance), omitted the version context entirely (so a GM

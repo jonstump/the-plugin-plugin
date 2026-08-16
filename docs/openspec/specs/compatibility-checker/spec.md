@@ -31,6 +31,19 @@ two are not interchangeable: a requirement that names `inferredLatest`
 means the peer-inference computation specifically, not "the comparison
 target" generally.
 
+"Pinned" and "starred" denote the same thing, deliberately. This spec,
+its `design.md`, and every internal identifier say **pinned** — the
+`pinnedCriticalModules` world setting, `PINNED_MODULES_SETTING_KEY`,
+`readPinnedModuleIds`, the `the-plugin-plugin-pinned-list` CSS class.
+All GM-facing text says **starred**, because the control the GM actually
+sees is a star icon; naming it "pin" described a control that was not on
+screen, which mattered most for the screen-reader label. The identifiers
+were left alone because the setting key names persisted world data, and
+migrating a GM's stored set for a cosmetic gain is the kind of churn
+CLAUDE.md project rule 2 exists to refuse. A requirement that says
+"pinned module" therefore governs the feature the UI calls "starred" —
+this is a naming split, not two concepts.
+
 ## Requirements
 
 ### Requirement: Manifest Check
