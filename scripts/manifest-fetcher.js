@@ -8,6 +8,14 @@
  * never contacts foundryvtt.com or any other third-party service for core
  * version data).
  *
+ * Governing: ADR-0003, SPEC-0002 (extends SPEC-0001) — when a package's
+ * declared manifest URL fails, `fetchPackageManifest` makes exactly one
+ * additional attempt against a `raw.githubusercontent.com` URL derived from
+ * the declared URL, for `github.com`-hosted declared URLs only. That second
+ * attempt happens inside the same per-package flow, so it shares the
+ * existing concurrency pool, cancellation signal, and session cache without
+ * any changes to `runWithConcurrency` or `checkPackages` themselves.
+ *
  * The functions below are written to be pure / dependency-injectable
  * (fetch implementation, cache, AbortSignal are all parameters) so the core
  * logic — the concurrency pool, per-package error isolation, and the
@@ -119,13 +127,21 @@ function errorResult(pkg, message) {
     // couldn't be fetched at all.
     links: null,
     status: "error",
-    // Governing: SPEC-0001 REQ "Error Handling Standards" — every failure is
-    // attributable to the specific package it occurred for.
+    // Governing: SPEC-0002 REQ "Result Provenance" — no manifest was ever
+    // resolved for an error result, so there is no source to attribute.
+    // Present on every result shape (ok or error) so downstream consumers
+    // (issue #32) don't need an `in` check to read it.
+    provenance: null,
+    // Governing: SPEC-0001 REQ "Error Handling Standards", SPEC-0002 REQ
+    // "Error Handling Standards" — every failure is attributable to the
+    // specific package it occurred for, and when both the declared and
+    // fallback attempts were made, `message` says so explicitly (built by
+    // the caller) rather than leaving that implicit.
     error: { packageId: pkg.id, message },
   };
 }
 
-function buildOkResult(pkg, manifest) {
+function buildOkResult(pkg, manifest, provenance = "declared") {
   const rawVerified = manifest?.compatibility?.verified ?? null;
   const compatibleCoreVersion = manifest?.compatibleCoreVersion ?? null;
   // Governing: SPEC-0001 REQ "Manifest Check" — fall back to the legacy
@@ -171,7 +187,91 @@ function buildOkResult(pkg, manifest) {
     },
     status: "ok",
     error: null,
+    // Governing: SPEC-0002 REQ "Result Provenance" — distinguishes a
+    // manifest read from the package's own declared URL from one recovered
+    // via the raw.githubusercontent.com fallback (ADR-0003), so downstream
+    // consumers (issue #32) never present default-branch data as a
+    // published release.
+    provenance,
   };
+}
+
+/**
+ * Attempts a single manifest fetch against `url`, never throwing — every
+ * failure mode (network error, non-200, malformed JSON, abort) resolves to
+ * `{ ok: false, message, aborted? }` instead. Shared by both the declared-URL
+ * attempt and the fallback attempt in `fetchPackageManifest` so the two
+ * share identical error handling per SPEC-0001/SPEC-0002 REQ "Error Handling
+ * Standards".
+ */
+async function attemptManifestFetch(url, fetchImpl, signal) {
+  let response;
+  try {
+    response = await fetchImpl(url, { signal });
+  } catch (err) {
+    if (err?.name === "AbortError") {
+      return { ok: false, aborted: true, message: "Manifest fetch was cancelled" };
+    }
+    return { ok: false, message: err?.message ?? String(err) };
+  }
+
+  if (!response.ok) {
+    return {
+      ok: false,
+      message: `Manifest request failed with status ${response.status}`,
+    };
+  }
+
+  try {
+    const manifest = await response.json();
+    return { ok: true, manifest };
+  } catch (err) {
+    return {
+      ok: false,
+      message: `Manifest response was not valid JSON: ${err?.message ?? err}`,
+    };
+  }
+}
+
+/**
+ * Derives a CORS-open `raw.githubusercontent.com` fallback URL from a
+ * package's *declared* manifest URL — never from a fetched manifest body,
+ * which is unavailable by construction on the failure path this exists to
+ * serve (`links` is `null` on error results). Returns `null` when the
+ * declared URL isn't a `github.com` URL, or doesn't parse into an
+ * `<owner>/<repo>/.../<filename>` shape.
+ *
+ * Governing: ADR-0003, SPEC-0002 REQ "Fallback URL Derivation", SPEC-0002
+ * REQ "Fallback Scope and Limits".
+ */
+export function deriveFallbackUrl(declaredUrl) {
+  if (!declaredUrl) return null;
+
+  let parsed;
+  try {
+    parsed = new URL(declaredUrl);
+  } catch {
+    return null;
+  }
+
+  // Governing: SPEC-0002 REQ "Fallback Scope and Limits" — the fallback is
+  // restricted to github.com; every other host stays "Couldn't check" with
+  // no fallback attempt.
+  if (parsed.hostname.toLowerCase() !== "github.com") return null;
+
+  const segments = parsed.pathname.split("/").filter(Boolean);
+  // Need at least <owner>/<repo>/<...>/<filename> — anything shorter can't
+  // carry a filename through.
+  if (segments.length < 3) return null;
+
+  const [owner, repo] = segments;
+  // Governing: SPEC-0002 REQ "Fallback URL Derivation" — carry the actual
+  // filename through rather than hardcoding module.json, so game systems
+  // (system.json) resolve correctly too.
+  const filename = segments[segments.length - 1];
+  if (!owner || !repo || !filename) return null;
+
+  return `https://raw.githubusercontent.com/${owner}/${repo}/HEAD/${filename}`;
 }
 
 /**
@@ -181,6 +281,14 @@ function buildOkResult(pkg, manifest) {
  *
  * Governing: SPEC-0001 REQ "Manifest Check", SPEC-0001 REQ "Error Handling
  * Standards", ADR-0001 (only ever fetches the package's own manifest URL).
+ *
+ * Governing: ADR-0003, SPEC-0002 REQ "Fallback Trigger and Ordering" — the
+ * declared URL is always attempted first; a raw.githubusercontent.com
+ * fallback is attempted at most once, only when the declared attempt fails,
+ * and only for github.com-hosted declared URLs (SPEC-0002 REQ "Fallback
+ * Scope and Limits"). Both attempts run inside this single function call, so
+ * they share whichever concurrency slot / cancellation signal the caller
+ * (`checkPackages`) is already managing — no pool changes needed.
  */
 export async function fetchPackageManifest(pkg, options = {}) {
   const { fetchImpl = fetch, signal } = options;
@@ -189,34 +297,52 @@ export async function fetchPackageManifest(pkg, options = {}) {
     return errorResult(pkg, "No manifest URL declared for this package");
   }
 
-  let response;
-  try {
-    response = await fetchImpl(pkg.manifestUrl, { signal });
-  } catch (err) {
-    if (err?.name === "AbortError") {
-      return errorResult(pkg, "Manifest fetch was cancelled");
-    }
-    return errorResult(pkg, err?.message ?? String(err));
+  const declaredAttempt = await attemptManifestFetch(
+    pkg.manifestUrl,
+    fetchImpl,
+    signal
+  );
+  if (declaredAttempt.ok) {
+    return buildOkResult(pkg, declaredAttempt.manifest, "declared");
   }
 
-  if (!response.ok) {
+  // Governing: SPEC-0002 REQ "Concurrency and Caching Interaction" — a
+  // cancelled scan must not spend a second request chasing a fallback; the
+  // whole check is being abandoned, so honor the same signal here.
+  if (declaredAttempt.aborted) {
+    return errorResult(pkg, declaredAttempt.message);
+  }
+
+  const fallbackUrl = deriveFallbackUrl(pkg.manifestUrl);
+
+  // Governing: SPEC-0002 REQ "Fallback Scope and Limits" — no fallback URL
+  // could be derived (non-github.com host, or an unparseable declared URL):
+  // report an honest "Couldn't check" with no further attempt, and no
+  // GitHub API call either way.
+  if (!fallbackUrl) {
     return errorResult(
       pkg,
-      `Manifest request failed with status ${response.status}`
+      `Declared manifest URL failed: ${declaredAttempt.message}`
     );
   }
 
-  let manifest;
-  try {
-    manifest = await response.json();
-  } catch (err) {
-    return errorResult(
-      pkg,
-      `Manifest response was not valid JSON: ${err?.message ?? err}`
-    );
+  const fallbackAttempt = await attemptManifestFetch(
+    fallbackUrl,
+    fetchImpl,
+    signal
+  );
+  if (fallbackAttempt.ok) {
+    return buildOkResult(pkg, fallbackAttempt.manifest, "fallback");
   }
 
-  return buildOkResult(pkg, manifest);
+  // Governing: SPEC-0002 REQ "Error Handling Standards" — when both attempts
+  // fail, the diagnostic says so explicitly, rather than reading like an
+  // untried package.
+  return errorResult(
+    pkg,
+    `Declared manifest URL failed: ${declaredAttempt.message}. Fallback ` +
+      `(raw.githubusercontent.com) also failed: ${fallbackAttempt.message}`
+  );
 }
 
 /**

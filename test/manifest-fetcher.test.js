@@ -4,7 +4,10 @@
 // Run with: npm test  (== node --test test/)
 //
 // Governing: SPEC-0001 REQ "Manifest Check", SPEC-0001 REQ "Error Handling
-// Standards", SPEC-0001 REQ "Fetch Concurrency and Caching"
+// Standards", SPEC-0001 REQ "Fetch Concurrency and Caching", ADR-0003,
+// SPEC-0002 REQ "Fallback Trigger and Ordering", REQ "Fallback URL
+// Derivation", REQ "Fallback Scope and Limits", REQ "Error Handling
+// Standards", REQ "Concurrency and Caching Interaction"
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -16,6 +19,7 @@ import {
   compareVersions,
   isNewerVersion,
   getActivePackagesFromGame,
+  deriveFallbackUrl,
 } from "../scripts/manifest-fetcher.js";
 
 function okResponse(body) {
@@ -170,6 +174,213 @@ test("fetchPackageManifest falls back to compatibleCoreVersion when compatibilit
   assert.equal(result.compatibility.compatibleCoreVersion, "12");
 });
 
+// --- deriveFallbackUrl ---------------------------------------------------
+
+test("deriveFallbackUrl parses owner/repo and carries the filename through for a module manifest", () => {
+  const fallback = deriveFallbackUrl(
+    "https://github.com/ruipin/fvtt-lib-wrapper/releases/latest/download/module.json"
+  );
+  assert.equal(
+    fallback,
+    "https://raw.githubusercontent.com/ruipin/fvtt-lib-wrapper/HEAD/module.json"
+  );
+});
+
+test("deriveFallbackUrl carries system.json through rather than hardcoding module.json", () => {
+  const fallback = deriveFallbackUrl(
+    "https://github.com/foundryvtt/starfinder/releases/latest/download/system.json"
+  );
+  assert.equal(
+    fallback,
+    "https://raw.githubusercontent.com/foundryvtt/starfinder/HEAD/system.json"
+  );
+});
+
+test("deriveFallbackUrl returns null for a non-github.com host", () => {
+  assert.equal(
+    deriveFallbackUrl("https://gitlab.com/owner/repo/-/jobs/artifacts/module.json"),
+    null
+  );
+  assert.equal(deriveFallbackUrl("https://example.com/module.json"), null);
+});
+
+test("deriveFallbackUrl returns null when it can't parse owner/repo/filename", () => {
+  assert.equal(deriveFallbackUrl("https://github.com/owner-only"), null);
+  assert.equal(deriveFallbackUrl(null), null);
+  assert.equal(deriveFallbackUrl("not a url"), null);
+});
+
+// --- fetchPackageManifest: fallback trigger, ordering, scope ------------
+
+test("fetchPackageManifest uses the declared manifest and issues no fallback request when it succeeds", async () => {
+  const pkg = {
+    id: "good-mod",
+    title: "Good Mod",
+    manifestUrl: "https://github.com/owner/good-mod/releases/latest/download/module.json",
+    installedVersion: "1.0.0",
+  };
+  let calls = 0;
+  const fetchImpl = async () => {
+    calls++;
+    return okResponse({ version: "1.1.0", compatibility: { verified: "13" } });
+  };
+
+  const result = await fetchPackageManifest(pkg, { fetchImpl });
+
+  assert.equal(calls, 1);
+  assert.equal(result.status, "ok");
+  assert.equal(result.provenance, "declared");
+});
+
+test("fetchPackageManifest falls back exactly once when the declared github.com URL fails", async () => {
+  const pkg = {
+    id: "flaky-mod",
+    title: "Flaky Mod",
+    manifestUrl: "https://github.com/owner/flaky-mod/releases/latest/download/module.json",
+    installedVersion: "1.0.0",
+  };
+  const requestedUrls = [];
+  const fetchImpl = async (url) => {
+    requestedUrls.push(url);
+    if (url.includes("raw.githubusercontent.com")) {
+      return okResponse({ version: "2.0.0", compatibility: { verified: "14" } });
+    }
+    throw new TypeError("Failed to fetch");
+  };
+
+  const result = await fetchPackageManifest(pkg, { fetchImpl });
+
+  assert.deepEqual(requestedUrls, [
+    "https://github.com/owner/flaky-mod/releases/latest/download/module.json",
+    "https://raw.githubusercontent.com/owner/flaky-mod/HEAD/module.json",
+  ]);
+  assert.equal(result.status, "ok");
+  assert.equal(result.provenance, "fallback");
+  assert.equal(result.latestVersion, "2.0.0");
+});
+
+test("fetchPackageManifest reports Couldn't check with a both-attempts diagnostic when declared and fallback both fail", async () => {
+  const pkg = {
+    id: "dead-both",
+    title: "Dead Both",
+    manifestUrl: "https://github.com/owner/dead-both/releases/latest/download/module.json",
+    installedVersion: "1.0.0",
+  };
+  let calls = 0;
+  const fetchImpl = async (url) => {
+    calls++;
+    if (url.includes("raw.githubusercontent.com")) {
+      return { ok: false, status: 404 };
+    }
+    throw new TypeError("Failed to fetch");
+  };
+
+  const result = await fetchPackageManifest(pkg, { fetchImpl });
+
+  assert.equal(calls, 2);
+  assert.equal(result.status, "error");
+  assert.equal(result.provenance, null);
+  assert.equal(result.error.packageId, "dead-both");
+  // Governing: SPEC-0002 REQ "Error Handling Standards" — the diagnostic
+  // makes clear both a declared and a fallback attempt were made, so this
+  // isn't mistaken for an untried package.
+  assert.match(result.error.message, /Declared manifest URL failed/);
+  assert.match(result.error.message, /Fallback .* also failed/);
+});
+
+test("fetchPackageManifest carries system.json through the fallback for a game system", async () => {
+  const pkg = {
+    id: "sfrpg",
+    title: "Starfinder",
+    manifestUrl: "https://github.com/foundryvtt/starfinder/releases/latest/download/system.json",
+    installedVersion: "0.30.1",
+    isSystem: true,
+  };
+  const requestedUrls = [];
+  const fetchImpl = async (url) => {
+    requestedUrls.push(url);
+    if (url.includes("raw.githubusercontent.com")) {
+      return okResponse({ version: "0.31.0", compatibility: { verified: "13" } });
+    }
+    throw new TypeError("Failed to fetch");
+  };
+
+  const result = await fetchPackageManifest(pkg, { fetchImpl });
+
+  assert.equal(
+    requestedUrls[1],
+    "https://raw.githubusercontent.com/foundryvtt/starfinder/HEAD/system.json"
+  );
+  assert.equal(result.status, "ok");
+  assert.equal(result.provenance, "fallback");
+});
+
+test("fetchPackageManifest does not attempt a fallback for a non-github.com host", async () => {
+  const pkg = {
+    id: "gitlab-mod",
+    title: "GitLab Mod",
+    manifestUrl: "https://gitlab.com/owner/gitlab-mod/-/jobs/artifacts/module.json",
+    installedVersion: "1.0.0",
+  };
+  let calls = 0;
+  const fetchImpl = async () => {
+    calls++;
+    throw new TypeError("Failed to fetch");
+  };
+
+  const result = await fetchPackageManifest(pkg, { fetchImpl });
+
+  assert.equal(calls, 1, "no fallback request should be issued for a non-github.com host");
+  assert.equal(result.status, "error");
+  assert.equal(result.provenance, null);
+});
+
+test("fetchPackageManifest treats a fallback 404 as terminal (manifest not at repo root)", async () => {
+  const pkg = {
+    id: "built-manifest",
+    title: "Built Manifest System",
+    manifestUrl: "https://github.com/owner/built-manifest/releases/latest/download/system.json",
+    installedVersion: "1.0.0",
+  };
+  let calls = 0;
+  const fetchImpl = async (url) => {
+    calls++;
+    if (url.includes("raw.githubusercontent.com")) {
+      return { ok: false, status: 404 };
+    }
+    throw new TypeError("Failed to fetch");
+  };
+
+  const result = await fetchPackageManifest(pkg, { fetchImpl });
+
+  assert.equal(calls, 2, "exactly one fallback attempt, no retries after the 404");
+  assert.equal(result.status, "error");
+});
+
+test("fetchPackageManifest never calls the GitHub API as part of the fallback", async () => {
+  const pkg = {
+    id: "no-api-mod",
+    title: "No API Mod",
+    manifestUrl: "https://github.com/owner/no-api-mod/releases/latest/download/module.json",
+    installedVersion: "1.0.0",
+  };
+  const requestedUrls = [];
+  const fetchImpl = async (url) => {
+    requestedUrls.push(url);
+    if (url.includes("raw.githubusercontent.com")) {
+      return okResponse({ version: "1.0.0" });
+    }
+    throw new TypeError("Failed to fetch");
+  };
+
+  await fetchPackageManifest(pkg, { fetchImpl });
+
+  assert.ok(
+    requestedUrls.every((url) => !url.includes("api.github.com")),
+    "fallback must not spend GitHub API rate-limit budget"
+  );
+});
+
 // --- checkPackages: concurrency + isolation + caching -------------------
 
 test("a single package's fetch failure does not affect any other package", async () => {
@@ -306,6 +517,91 @@ test("cancellation stops consuming concurrency slots", async () => {
   assert.ok(
     results.length < packages.length,
     `expected fewer than ${packages.length} results, got ${results.length}`
+  );
+});
+
+test("checkPackages holds the concurrency cap when every package falls back", async () => {
+  // Governing: SPEC-0002 REQ "Concurrency and Caching Interaction" — a
+  // package that falls back consumes its slot twice in sequence, never
+  // twice concurrently, so the cap holds even under full-fallback load.
+  const packages = Array.from({ length: 9 }, (_, i) => ({
+    id: `pkg-${i}`,
+    title: `Pkg ${i}`,
+    manifestUrl: `https://github.com/owner/pkg-${i}/releases/latest/download/module.json`,
+    installedVersion: "1.0.0",
+  }));
+  let active = 0;
+  let maxActive = 0;
+  const fetchImpl = async (url) => {
+    active++;
+    maxActive = Math.max(maxActive, active);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    active--;
+    if (url.includes("raw.githubusercontent.com")) {
+      return okResponse({ version: "1.0.0", compatibility: { verified: "13" } });
+    }
+    throw new TypeError("Failed to fetch");
+  };
+
+  const results = await checkPackages(packages, {
+    fetchImpl,
+    cache: new Map(),
+    concurrency: 3,
+  });
+
+  assert.equal(results.length, 9);
+  assert.ok(
+    results.every((r) => r.status === "ok" && r.provenance === "fallback")
+  );
+  assert.ok(maxActive <= 3, `maxActive was ${maxActive}, expected <= 3`);
+});
+
+test("cancellation stops a fallback attempt mid-flight without throwing or reporting a partial result", async () => {
+  const packages = [
+    {
+      id: "gh-mod",
+      title: "GH Mod",
+      manifestUrl: "https://github.com/owner/gh-mod/releases/latest/download/module.json",
+      installedVersion: "1.0.0",
+    },
+  ];
+  const controller = new AbortController();
+  let fallbackCalls = 0;
+
+  const fetchImpl = async (url, { signal } = {}) => {
+    if (url.includes("raw.githubusercontent.com")) {
+      fallbackCalls++;
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(
+          () => resolve(okResponse({ version: "1.0.0" })),
+          30
+        );
+        signal?.addEventListener("abort", () => {
+          clearTimeout(timer);
+          const err = new Error("aborted");
+          err.name = "AbortError";
+          reject(err);
+        });
+      });
+    }
+    // Declared attempt fails immediately, triggering the fallback.
+    throw new TypeError("Failed to fetch");
+  };
+
+  const resultsPromise = checkPackages(packages, {
+    fetchImpl,
+    cache: new Map(),
+    signal: controller.signal,
+  });
+
+  setTimeout(() => controller.abort(), 5);
+  const results = await resultsPromise;
+
+  assert.equal(fallbackCalls, 1, "the fallback attempt should have started");
+  assert.equal(
+    results.length,
+    0,
+    "an in-flight fallback aborted before resolving reports no partial result"
   );
 });
 
