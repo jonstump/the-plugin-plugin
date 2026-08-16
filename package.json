@@ -3,6 +3,9 @@
   "private": true,
   "type": "module",
   "description": "Unit tests for The Plugin Plugin's pure logic (no build step, no bundler — Node's built-in test runner only).",
+  "engines": {
+    "node": "^22.0.0"
+  },
   "scripts": {
     "test": "node --test"
   },
