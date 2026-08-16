@@ -3,15 +3,16 @@
 //
 // Run with: npm test  (== node --test test/)
 //
-// Governing: SPEC-0001 REQ "Inferred Latest Version", SPEC-0001 REQ
-// "Compatibility Severity Classification", SPEC-0001 REQ "Possibly
-// Unmaintained Heuristic"
+// Governing: SPEC-0001 REQ "Target Version Determination", SPEC-0001 REQ
+// "Inferred Latest Version", SPEC-0001 REQ "Compatibility Severity
+// Classification", SPEC-0001 REQ "Possibly Unmaintained Heuristic"
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import {
   computeInferredLatest,
+  determineComparisonTarget,
   classifyPackages,
   parseGithubRepo,
   checkGithubArchived,
@@ -69,6 +70,91 @@ test("computeInferredLatest: ignores errored packages and packages with no verif
   const { value, hasPeerSignal } = computeInferredLatest(results, "13");
   assert.equal(hasPeerSignal, false);
   assert.equal(value, null);
+});
+
+// --- determineComparisonTarget --------------------------------------------
+// Governing: ADR-0001 (amended 2026-08-15), SPEC-0001 REQ "Target Version
+// Determination", SPEC-0001 REQ "Inferred Latest Version".
+
+test("determineComparisonTarget: authoritative target used when couldReachWebsite is true and version is present", () => {
+  const results = [okPkg({ id: "a", verified: "13" })]; // would give no peer signal if it mattered
+  const target = determineComparisonTarget(results, "13", {
+    coreUpdate: { hasUpdate: true, couldReachWebsite: true, version: "14.366" },
+    gameReleaseVersion: "13.351",
+  });
+  assert.equal(target.source, "authoritative");
+  assert.equal(target.value, "14"); // generation-normalized, for comparison against compatibility.verified
+  assert.equal(target.rawVersion, "14.366"); // full version preserved for display
+  assert.equal(target.isNewer, true);
+});
+
+test("determineComparisonTarget: hasUpdate false with a newer version still targets it (the hasUpdate trap)", () => {
+  // Governing: ADR-0001 Amendment — measured live: hasUpdate read false while
+  // version read "14.366" on a world running 13.351. Gating on hasUpdate
+  // would silently suppress exactly this cross-generation signal.
+  const target = determineComparisonTarget([], "13", {
+    coreUpdate: { hasUpdate: false, couldReachWebsite: true, version: "14.366" },
+    gameReleaseVersion: "13.351",
+  });
+  assert.equal(target.source, "authoritative");
+  assert.equal(target.value, "14");
+  assert.equal(target.isNewer, true);
+});
+
+test("determineComparisonTarget: authoritative target present but not newer (already current) is still authoritative", () => {
+  const target = determineComparisonTarget([], "13", {
+    coreUpdate: { hasUpdate: false, couldReachWebsite: true, version: "13.351" },
+    gameReleaseVersion: "13.351",
+  });
+  assert.equal(target.source, "authoritative");
+  assert.equal(target.value, "13");
+  assert.equal(target.isNewer, false);
+});
+
+test("determineComparisonTarget: couldReachWebsite false falls back to peer inference, never reports current as confirmed", () => {
+  const results = [
+    okPkg({ id: "a", verified: "14" }),
+    okPkg({ id: "b", verified: "13" }),
+  ];
+  const target = determineComparisonTarget(results, "13", {
+    coreUpdate: { hasUpdate: false, couldReachWebsite: false, version: null },
+    gameReleaseVersion: "13.351",
+  });
+  assert.equal(target.source, "inferred");
+  assert.equal(target.value, "14");
+  assert.equal(target.hasPeerSignal, true);
+});
+
+test("determineComparisonTarget: absent coreUpdate payload falls back to peer inference", () => {
+  const results = [okPkg({ id: "a", verified: "14" })];
+  const target = determineComparisonTarget(results, "13", {
+    gameReleaseVersion: "13.351",
+  });
+  assert.equal(target.source, "inferred");
+  assert.equal(target.value, "14");
+});
+
+test("determineComparisonTarget: fallback with no peer signal reports no evidence, not confirmation of currency", () => {
+  const results = [okPkg({ id: "a", verified: "13" })];
+  const target = determineComparisonTarget(results, "13", {
+    coreUpdate: { hasUpdate: false, couldReachWebsite: false, version: null },
+    gameReleaseVersion: "13.351",
+  });
+  assert.equal(target.source, "inferred");
+  assert.equal(target.value, null);
+  assert.equal(target.hasPeerSignal, false);
+});
+
+test("determineComparisonTarget: coreUpdate.version present but couldReachWebsite missing falls back", () => {
+  // couldReachWebsite must be exactly `true`, not just "version happens to
+  // be present" -- an absent/false couldReachWebsite is unknown, not
+  // authoritative, even if a stale version string is still sitting there.
+  const results = [okPkg({ id: "a", verified: "14" })];
+  const target = determineComparisonTarget(results, "13", {
+    coreUpdate: { version: "14.366" },
+    gameReleaseVersion: "13.351",
+  });
+  assert.equal(target.source, "inferred");
 });
 
 // --- classifyPackages: severity ------------------------------------------
@@ -141,17 +227,17 @@ test("severity: hard against inferredLatest even when soft (or clean) against ga
     // because inferredLatest is one of the two comparison targets.
     okPkg({ id: "c", verified: "13", compatibility: { verified: "13", maximum: "13", minimum: null, compatibleCoreVersion: null } }),
   ];
-  const { inferredLatest, packages } = classifyPackages(results, "13");
-  assert.equal(inferredLatest.value, "14");
+  const { comparisonTarget, packages } = classifyPackages(results, "13");
+  assert.equal(comparisonTarget.value, "14");
 
   const b = packages.find((p) => p.id === "b");
   assert.equal(b.gameReleaseComparison.severity, null); // verifies game.release
-  assert.equal(b.inferredLatestComparison.severity, "soft");
+  assert.equal(b.targetComparison.severity, "soft");
   assert.equal(b.severity, "soft");
 
   const c = packages.find((p) => p.id === "c");
   assert.equal(c.gameReleaseComparison.severity, null); // maximum (13) is at game.release, not below it
-  assert.equal(c.inferredLatestComparison.severity, "hard"); // maximum (13) is below inferredLatest (14)
+  assert.equal(c.targetComparison.severity, "hard"); // maximum (13) is below the comparison target (14)
   // Judgment call: hard against either target wins overall.
   assert.equal(c.severity, "hard");
 });
@@ -162,6 +248,66 @@ test("failsVerifiedCheck is false once a package verifies inferredLatest, even i
   const { packages } = classifyPackages(results, "13");
   assert.equal(packages[0].failsVerifiedCheck, false);
   assert.equal(packages[0].severity, null);
+});
+
+// --- classifyPackages: authoritative target wiring -------------------------
+// Governing: ADR-0001 (amended 2026-08-15), SPEC-0001 REQ "Target Version
+// Determination".
+
+test("classifyPackages: authoritative coreUpdate target takes priority over peer inference", () => {
+  const results = [
+    // If peer inference ran, this package alone would set inferredLatest to
+    // "15" -- but an authoritative target is supplied, so it must not.
+    okPkg({ id: "leader", verified: "15", compatibility: { verified: "15", maximum: null, minimum: null, compatibleCoreVersion: null } }),
+    okPkg({
+      id: "lagging",
+      verified: "13",
+      compatibility: { verified: "13", maximum: "13", minimum: null, compatibleCoreVersion: null },
+    }),
+  ];
+  const { comparisonTarget, packages } = classifyPackages(results, "13", {
+    coreUpdate: { hasUpdate: false, couldReachWebsite: true, version: "14.366" },
+    gameReleaseVersion: "13.351",
+  });
+
+  assert.equal(comparisonTarget.source, "authoritative");
+  assert.equal(comparisonTarget.value, "14");
+  // Governing: SPEC-0001 "Authoritative target available" scenario — "does
+  // not compute a peer-inferred target." hasPeerSignal is hardcoded false
+  // on the authoritative branch precisely so callers can't mistake this for
+  // a peer-derived value even though a peer signal (15) existed.
+  assert.equal(comparisonTarget.hasPeerSignal, false);
+
+  const lagging = packages.find((p) => p.id === "lagging");
+  // maximum (13) is below the authoritative target's generation (14) --
+  // hard severity, not against the peer-only "15" that inference would
+  // have produced.
+  assert.equal(lagging.targetComparison.target, "14");
+  assert.equal(lagging.targetComparison.severity, "hard");
+});
+
+test("classifyPackages: with no coreUpdate option, behaves exactly as the pre-#36 peer-inference-only path", () => {
+  const results = [
+    okPkg({ id: "a", verified: "14", compatibility: { verified: "14", maximum: null, minimum: null, compatibleCoreVersion: null } }),
+    okPkg({ id: "b", verified: "13", compatibility: { verified: "13", maximum: null, minimum: null, compatibleCoreVersion: null } }),
+  ];
+  const { comparisonTarget, packages } = classifyPackages(results, "13");
+  assert.equal(comparisonTarget.source, "inferred");
+  assert.equal(comparisonTarget.value, "14");
+  assert.equal(packages.find((p) => p.id === "b").targetComparison.severity, "soft");
+});
+
+test("classifyPackages: couldReachWebsite false still exercises the peer-inference fallback, no-peer-signal case included", () => {
+  const results = [okPkg({ id: "a", verified: "13", compatibility: { verified: "13", maximum: null, minimum: null, compatibleCoreVersion: null } })];
+  const { comparisonTarget, packages } = classifyPackages(results, "13", {
+    coreUpdate: { hasUpdate: false, couldReachWebsite: false, version: null },
+    gameReleaseVersion: "13.351",
+  });
+  assert.equal(comparisonTarget.source, "inferred");
+  assert.equal(comparisonTarget.value, null);
+  assert.equal(comparisonTarget.hasPeerSignal, false);
+  assert.equal(packages[0].targetComparison.severity, null);
+  assert.equal(packages[0].failsVerifiedCheck, false); // no target at all -- not a failure
 });
 
 // --- parseGithubRepo -------------------------------------------------------
@@ -206,7 +352,7 @@ function failingPkg(id, overrides = {}) {
   return {
     ...okPkg({ id, verified: "12", compatibility: { verified: "12", maximum: null, minimum: null, compatibleCoreVersion: null } }),
     gameReleaseComparison: { target: "13", verifies: false, severity: "soft" },
-    inferredLatestComparison: { target: null, verifies: null, severity: null },
+    targetComparison: { target: null, verifies: null, severity: null },
     severity: "soft",
     failsVerifiedCheck: true,
     ...overrides,
@@ -217,7 +363,7 @@ function passingPkg(id) {
   return {
     ...okPkg({ id, verified: "13", compatibility: { verified: "13", maximum: null, minimum: null, compatibleCoreVersion: null } }),
     gameReleaseComparison: { target: "13", verifies: true, severity: null },
-    inferredLatestComparison: { target: null, verifies: null, severity: null },
+    targetComparison: { target: null, verifies: null, severity: null },
     severity: null,
     failsVerifiedCheck: false,
   };
@@ -324,12 +470,12 @@ test("classifyCompatibility ties inferredLatest, severity, and possiblyUnmaintai
   ];
   const githubCheck = async () => ({ archived: true, reason: null });
 
-  const { inferredLatest, packages } = await classifyCompatibility(results, "13", {
+  const { comparisonTarget, packages } = await classifyCompatibility(results, "13", {
     previousVersions: { straggler: "1.0.0" },
     githubCheck,
   });
 
-  assert.equal(inferredLatest.value, "14");
+  assert.equal(comparisonTarget.value, "14");
 
   const straggler = packages.find((p) => p.id === "straggler");
   assert.equal(straggler.severity, "hard"); // maximum (12) below game.release (13)
