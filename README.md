@@ -14,9 +14,12 @@ package's own manifest.
 
 The full v1 scope is implemented and merged: manifest fetching, the
 compatibility classification layer, the GM-only checker table (with
-pinning and copy-report), and the login notification. No tagged release
-exists yet. See [CLAUDE.md](CLAUDE.md) for the full v1 scope and project
-rules.
+pinning and copy-report), and the login notification. Verified compatible
+with Foundry v13 and v14.
+
+Pre-1.0 — out for early testing and feedback, not a general release yet.
+Expect rough edges; bug reports welcome. See [CLAUDE.md](CLAUDE.md) for the
+full v1 scope and project rules.
 
 ## Important: compatibility is developer-declared, not tested
 
@@ -62,14 +65,18 @@ dated correction explaining what was wrong.
 
 ## Installation
 
-Manifest URL (once releases exist):
+1. In Foundry, go to **Add-on Modules**.
+2. Click **Install Module**.
+3. Paste this into the **Manifest URL** field:
+   ```
+   https://github.com/jonstump/the-plugin-plugin/releases/latest/download/module.json
+   ```
+4. Click **Install**.
+5. Enable it for your world under **Manage Modules**.
 
-```
-https://github.com/jonstump/the-plugin-plugin/releases/latest/download/module.json
-```
-
-Paste that into Foundry's **Install Module** dialog, or add it manually via
-`module.json`.
+It's GM-only — once enabled, log in as GM and you'll get a whispered chat
+summary, or open the checker manually from the **Compatibility Checker**
+window.
 
 ## Scope
 
