@@ -622,18 +622,47 @@ async function postChatSummary(
 ) {
   const i18n = gameInstance.i18n;
 
-  // Governing: SPEC-0001 REQ "Login Notification" — "MUST present its
-  // per-status counts as a structured list rather than a single prose
-  // sentence."
-  const statusItems = buildStatusCountEntries(summary)
-    .map(
-      (entry) =>
-        `<li>${i18n.format("THE-PLUGIN-PLUGIN.LoginNotification.StatusCountItem", {
-          label: i18n.localize(entry.i18nKey),
-          count: entry.count,
-        })}</li>`
-    )
-    .join("");
+  // PROTOTYPE (not committed) — trimmed down from the full six-status
+  // breakdown to just two lines for a quick demo: verified/unverified and
+  // has-updates. "Verified" = up to date & verified + verified/update
+  // unknown; everything else (hard/soft issues, possibly unmaintained,
+  // couldn't check) folds into "unverified".
+  const verifiedCount = (summary.upToDate ?? 0) + (summary.verifiedUpdateUnknown ?? 0);
+  const unverifiedCount =
+    (summary.hardIssues ?? 0) +
+    (summary.softIssues ?? 0) +
+    (summary.possiblyUnmaintained ?? 0) +
+    (summary.couldntCheck ?? 0);
+  const statusItems = [
+    `<li>${verifiedCount} verified, ${unverifiedCount} unverified</li>`,
+    `<li>${summary.updatesAvailable ?? 0} update${summary.updatesAvailable === 1 ? "" : "s"} available</li>`,
+  ].join("");
+
+  // PROTOTYPE (not committed) — "Should I update?" mock verdict. Pins are
+  // load-bearing: ANY starred/pinned package with a genuine verification
+  // risk (not-yet-verified, possibly unmaintained, couldn't check) forces
+  // "No" outright, regardless of everything else — a starred module is
+  // explicitly flagged as critical, so its own risk overrides the overall
+  // picture. Otherwise: any unverified package anywhere -> "Maybe" (use
+  // judgment); a fully clean list -> "Yes". A bare "update available" on a
+  // clean/verified package is not itself a risk and never factors in here.
+  const pinnedSetForVerdict =
+    pinnedModuleIds instanceof Set ? pinnedModuleIds : new Set(pinnedModuleIds ?? []);
+  const VERDICT_RISK_STATUSES = new Set([
+    STATUS_LABEL_KEYS.NOT_YET_VERIFIED,
+    STATUS_LABEL_KEYS.POSSIBLY_UNMAINTAINED,
+    STATUS_LABEL_KEYS.COULDNT_CHECK,
+  ]);
+  const pinnedAtRisk = (packages ?? []).some(
+    (pkg) => pinnedSetForVerdict.has(pkg.id) && VERDICT_RISK_STATUSES.has(deriveStatusLabelKey(pkg))
+  );
+  const verdict = pinnedAtRisk ? "no" : unverifiedCount > 0 ? "maybe" : "yes";
+  const VERDICT_LABEL = { yes: "Yes", no: "No", maybe: "Maybe" };
+  const VERDICT_ICON = { yes: "fa-circle-check", no: "fa-ban", maybe: "fa-triangle-exclamation" };
+  const verdictLine =
+    `<p class="the-plugin-plugin-update-verdict verdict-${verdict}">Should I update? ` +
+    `<i class="fa-solid ${VERDICT_ICON[verdict]}" aria-hidden="true"></i> ` +
+    `<strong>${VERDICT_LABEL[verdict]}</strong></p>`;
 
   // Governing: SPEC-0001 REQ "Login Notification" — "MUST state the running
   // Foundry version and the active comparison target, and MUST identify
@@ -646,31 +675,48 @@ async function postChatSummary(
     targetVersion: versionContext.targetVersion ?? "",
   });
 
-  // Governing: SPEC-0001 REQ "Login Notification" — "MUST name each pinned
-  // module whose status is not 'Up to date & verified' ... When no module
-  // is pinned, the summary MUST omit this section entirely."
-  const pinnedEntries = buildPinnedCallout(pinnedModuleIds, packages);
-  const pinnedSection = pinnedEntries.length
+  // PROTOTYPE (not committed) — tightened starred-modules list: instead of
+  // the full status sentence, each entry gets short icon+word flags.
+  // "Unverified" covers all three risk statuses (not-yet-verified, possibly
+  // unmaintained, couldn't check) rather than naming which one — core-
+  // version compatibility is the thing that actually breaks a world on a
+  // major Foundry release, so that's the one flag worth calling out here;
+  // "Update available" is a separate, non-risk flag. A module can carry
+  // both. A clean starred module (neither flag applies) is omitted, same
+  // as buildPinnedCallout's original "Up to date & verified" exclusion.
+  const pinnedTightEntries = (packages ?? [])
+    .filter((pkg) => pinnedSetForVerdict.has(pkg.id))
+    .map((pkg) => {
+      const isUnverified = VERDICT_RISK_STATUSES.has(deriveStatusLabelKey(pkg));
+      const hasUpdate = pkg.updateAvailable === true;
+      if (!isUnverified && !hasUpdate) return null;
+      const flags = [
+        isUnverified
+          ? `<span class="verdict-flag flag-unverified"><i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i> Unverified</span>`
+          : "",
+        hasUpdate
+          ? `<span class="verdict-flag flag-update"><i class="fa-solid fa-arrow-up" aria-hidden="true"></i> Update available</span>`
+          : "",
+      ]
+        .filter(Boolean)
+        .join(" ");
+      return `<li>${pkg.title ?? pkg.id} — ${flags}</li>`;
+    })
+    .filter(Boolean);
+  const pinnedSection = pinnedTightEntries.length
     ? [
         `<p class="the-plugin-plugin-pinned-heading">${i18n.localize(
           "THE-PLUGIN-PLUGIN.LoginNotification.PinnedHeading"
         )}</p>`,
         `<ul class="the-plugin-plugin-pinned-list">`,
-        pinnedEntries
-          .map(
-            (entry) =>
-              `<li>${i18n.format("THE-PLUGIN-PLUGIN.LoginNotification.PinnedItem", {
-                title: entry.title,
-                status: i18n.localize(entry.i18nKey),
-              })}</li>`
-          )
-          .join(""),
+        pinnedTightEntries.join(""),
         `</ul>`,
       ].join("")
     : "";
 
   const content = [
     `<div class="the-plugin-plugin-login-summary">`,
+    verdictLine,
     `<p class="the-plugin-plugin-version-context">${versionContextNote}</p>`,
     `<p>${i18n.format("THE-PLUGIN-PLUGIN.LoginNotification.ResultsHeading", {
       total: summary.total,

@@ -152,8 +152,51 @@
   font-weight: bold;
 }
 
+/* PROTOTYPE (not committed) — "Should I update?" mock verdict line. */
+.the-plugin-plugin-login-summary .the-plugin-plugin-update-verdict {
+  margin: 0 0 0.5rem 0;
+  padding: 0.35rem 0.6rem;
+  border-radius: 4px;
+  font-size: var(--font-size-14, 14px);
+}
+
+.the-plugin-plugin-login-summary .the-plugin-plugin-update-verdict.verdict-yes {
+  background: rgba(38, 156, 74, 0.15);
+  border: 1px solid var(--color-level-success, #269c4a);
+  color: var(--color-level-success, #269c4a);
+}
+
+.the-plugin-plugin-login-summary .the-plugin-plugin-update-verdict.verdict-maybe {
+  background: rgba(241, 163, 37, 0.15);
+  border: 1px solid var(--color-level-warning, #f1a325);
+  color: var(--color-level-warning, #f1a325);
+}
+
+.the-plugin-plugin-login-summary .the-plugin-plugin-update-verdict.verdict-no {
+  background: rgba(197, 49, 49, 0.15);
+  border: 1px solid var(--color-level-error, #c53131);
+  color: var(--color-level-error, #c53131);
+}
+
 .the-plugin-plugin-login-summary .the-plugin-plugin-pinned-list {
   margin: 0 0 0.75rem 0;
+}
+
+/* PROTOTYPE (not committed) — tightened starred-module flags (icon + short
+ * word) replacing the full status sentence. */
+.the-plugin-plugin-login-summary .verdict-flag {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-weight: bold;
+}
+
+.the-plugin-plugin-login-summary .verdict-flag.flag-unverified {
+  color: var(--color-level-warning, #f1a325);
+}
+
+.the-plugin-plugin-login-summary .verdict-flag.flag-update {
+  color: var(--color-level-info, #3b7dd8);
 }
 
 .the-plugin-plugin-login-summary button {

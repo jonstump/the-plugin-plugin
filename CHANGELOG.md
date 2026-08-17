@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- ADR-0009 (proposed): design for a "Should I update?" verdict on the login
+  notification — pinned modules gate to a hard "No," a GM-configurable
+  percentage threshold decides "Yes" vs. "Proceed with caution" for the
+  rest of the modlist, computed only on a major (generation) Foundry
+  version change. Prototype UI (uncommitted-turned-WIP) in
+  `scripts/login-notification.js`/`styles/the-plugin-plugin.css` is out for
+  real-world feedback; not yet the real implementation.
 - Repo scaffold: `module.json`, project rules (`CLAUDE.md`), README, MIT
   license, CI release workflow, and the Foundry-version-detection research
   doc.
