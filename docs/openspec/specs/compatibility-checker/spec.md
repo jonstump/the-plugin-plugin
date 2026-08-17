@@ -254,6 +254,23 @@ version, verified core version, and status.
 - The window MUST display a visible reminder that package developers are
   volunteers and that a lagging or unverified status does not mean a
   package will never be updated.
+- The window MUST display a legend naming, in visible text, every icon-only
+  control the table renders: the star toggle, the three link-out icons
+  (project page, report issue, changelog), and the copy-report button. An
+  icon that already appears beside its own explanatory text — the volunteer
+  reminder, the comparison-target note, the provenance badge — MUST NOT be
+  repeated in the legend, since a legend entry would only restate a sentence
+  already on screen. The legend is the sighted-GM counterpart to the
+  per-control `aria-label`s required by Accessibility Requirements §
+  Icon-Only Controls, and MUST NOT replace them or introduce a new focus
+  stop of its own.
+
+#### Scenario: Icon legend names every icon-only control
+
+- **WHEN** the checker window renders
+- **THEN** a legend is visible naming each of the five icon-only controls
+  (star toggle, project page, report issue, changelog, copy report) in text,
+  and naming no icon that already carries its own explanatory text
 
 #### Scenario: Non-GM user
 
@@ -570,6 +587,12 @@ The pin/star toggle, the copy-report button, and every link-out icon
 (project page, report issue, changelog) are icon-only controls and MUST
 each include an `aria-label` describing their specific action (e.g.,
 "Pin lib-wrapper as a critical module," not a generic "Pin").
+
+The icon legend required by REQ "Checker Table" is additive to these
+labels, not a substitute for them: it names each icon generically for a
+sighted GM, whereas the per-control `aria-label` names the action for a
+specific row's package. Removing either one leaves one audience without a
+text alternative.
 
 ### Dynamic Content Regions
 

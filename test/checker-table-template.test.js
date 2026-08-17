@@ -167,6 +167,110 @@ test("only the issue link-out anchor renders when url and changelog are null but
   assert.ok(html.includes('href="https://example.com/issues"'));
 });
 
+// --- Icon legend --------------------------------------------------------
+// Governing: SPEC-0001 REQ "Checker Table" — "The window MUST display a
+// legend naming, in visible text, every icon-only control the table
+// renders." The legend is static markup in the template (no view-model), so
+// these assertions check the `localize` keys the stub echoes back.
+
+const LEGEND_KEYS = [
+  "THE-PLUGIN-PLUGIN.CheckerTable.LegendStar",
+  "THE-PLUGIN-PLUGIN.CheckerTable.LegendProjectPage",
+  "THE-PLUGIN-PLUGIN.CheckerTable.LegendReportIssue",
+  "THE-PLUGIN-PLUGIN.CheckerTable.LegendChangelog",
+  "THE-PLUGIN-PLUGIN.CheckerTable.LegendCopyReport",
+];
+
+test("the icon legend names all five icon-only controls, with a heading", () => {
+  const html = template(baseContext());
+  assert.ok(html.includes("THE-PLUGIN-PLUGIN.CheckerTable.LegendHeading"));
+  for (const key of LEGEND_KEYS) {
+    assert.ok(html.includes(key), `expected the legend to include ${key}`);
+  }
+});
+
+test("each legend entry pairs its label with the same icon class the table row uses", () => {
+  const html = template(
+    baseContext({
+      rows: [
+        row({
+          links: {
+            url: "https://example.com/u",
+            issue: "https://example.com/i",
+            changelog: "https://example.com/c",
+          },
+        }),
+      ],
+    })
+  );
+  const legend = html.match(/<div class="icon-legend">[\s\S]*?<\/div>/)?.[0];
+  assert.ok(legend, "expected an icon-legend block in the output");
+  // Each icon appears in the legend AND in the table itself — a legend
+  // showing an icon the rows don't use (or missing one they do) is the
+  // failure mode this guards.
+  const pairs = [
+    ["fa-star", "THE-PLUGIN-PLUGIN.CheckerTable.LegendStar"],
+    ["fa-arrow-up-right-from-square", "THE-PLUGIN-PLUGIN.CheckerTable.LegendProjectPage"],
+    ["fa-bug", "THE-PLUGIN-PLUGIN.CheckerTable.LegendReportIssue"],
+    ["fa-clock-rotate-left", "THE-PLUGIN-PLUGIN.CheckerTable.LegendChangelog"],
+    ["fa-copy", "THE-PLUGIN-PLUGIN.CheckerTable.LegendCopyReport"],
+  ];
+  for (const [iconClass, key] of pairs) {
+    assert.ok(legend.includes(iconClass), `legend is missing the ${iconClass} icon`);
+    assert.ok(legend.includes(key), `legend is missing ${key}`);
+    const outsideLegend = html.replace(legend, "");
+    assert.ok(
+      outsideLegend.includes(iconClass),
+      `${iconClass} is in the legend but not used by any table row`
+    );
+  }
+});
+
+test("the legend omits icons that already carry their own explanatory text (heart, comparison target, provenance)", () => {
+  const html = template(
+    baseContext({
+      comparisonTarget: {
+        statusClass: "inferred",
+        iconClass: "fa-circle-question",
+        note: "Not confirmed.",
+      },
+      rows: [
+        row({
+          provenance: {
+            statusClass: "fallback",
+            iconClass: "fa-code-branch",
+            note: "Read from the repository's default branch, not a published release.",
+          },
+        }),
+      ],
+    })
+  );
+  const legend = html.match(/<div class="icon-legend">[\s\S]*?<\/div>/)?.[0];
+  assert.ok(legend);
+  for (const iconClass of ["fa-heart", "fa-circle-question", "fa-circle-check", "fa-code-branch"]) {
+    assert.ok(!legend.includes(iconClass), `legend should not restate the ${iconClass} icon`);
+  }
+});
+
+test("the legend introduces no focusable element and no new aria-live region", () => {
+  const html = template(baseContext());
+  const legend = html.match(/<div class="icon-legend">[\s\S]*?<\/div>/)?.[0];
+  assert.ok(legend);
+  assert.ok(!/<(a|button|input|select|textarea)\b/.test(legend));
+  assert.ok(!/tabindex=/.test(legend));
+  assert.ok(!/aria-live=/.test(legend));
+  // Its icons are decorative — the visible text beside each one is the
+  // accessible content (Accessibility Requirements § Icon-Only Controls).
+  const iconTags = legend.match(/<i\b[^>]*>/g) ?? [];
+  assert.equal(iconTags.length, 5);
+  for (const tag of iconTags) assert.ok(tag.includes('aria-hidden="true"'));
+});
+
+test("the legend renders even when the scan is still loading and no rows exist yet", () => {
+  const html = template(baseContext({ rows: [], loading: true }));
+  for (const key of LEGEND_KEYS) assert.ok(html.includes(key));
+});
+
 // --- aria-labels on icon-only controls --------------------------------------
 // Governing: SPEC-0001 "Accessibility Requirements" § Icon-Only Controls.
 
