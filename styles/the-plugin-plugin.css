@@ -32,17 +32,21 @@
   gap: 0.75rem;
 }
 
-/* Governing: SPEC-0001 REQ "Checker Table" — the icon legend. Sits directly
- * above the table so it reads as a key for the columns below it, and stays
- * visually quiet (same muted treatment as .developer-declared-note) so it
- * never competes with the rows themselves. Wraps rather than scrolls: the
- * window is resizable, and a narrow window should reflow the key, not clip
- * it. */
+/* Governing: SPEC-0001 REQ "Checker Table" — the icon legend. Sits at the
+ * bottom of the window, below the results (GM feedback), reading as a
+ * footer: the rule above it separates it from the last table row, and the
+ * muted treatment (same as .developer-declared-note) keeps it from competing
+ * with the rows. The table region is the flex child that grows, so this
+ * stays against the window's bottom edge instead of scrolling with the rows.
+ * Wraps rather than scrolls: the window is resizable, and a narrow window
+ * should reflow the key, not clip it. */
 .the-plugin-plugin-checker-table .icon-legend {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
   gap: 0.25rem 0.75rem;
+  padding-top: 0.4rem;
+  border-top: 1px solid var(--color-border-light-tertiary, #c9c7b8);
   font-size: var(--font-size-12, 12px);
   opacity: 0.8;
 }

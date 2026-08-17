@@ -266,6 +266,15 @@ test("the legend introduces no focusable element and no new aria-live region", (
   for (const tag of iconTags) assert.ok(tag.includes('aria-hidden="true"'));
 });
 
+test("the legend renders after the results table, not before it (GM feedback — the results lead, the key follows)", () => {
+  // Placement is a UI decision, not a SPEC-0001 requirement (the spec
+  // mandates that a legend exists, not where it sits) — asserted here so a
+  // later edit that moves it back above the table is a deliberate change
+  // rather than an accident.
+  const html = template(baseContext());
+  assert.ok(html.indexOf('class="icon-legend"') > html.indexOf('role="main"'));
+});
+
 test("the legend renders even when the scan is still loading and no rows exist yet", () => {
   const html = template(baseContext({ rows: [], loading: true }));
   for (const key of LEGEND_KEYS) assert.ok(html.includes(key));

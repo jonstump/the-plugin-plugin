@@ -39,47 +39,6 @@
     <span class="scan-status" aria-live="polite">{{scanStatusMessage}}</span>
   </div>
 
-  {{! Governing: SPEC-0001 REQ "Checker Table" — "The window MUST display a
-      legend naming every icon-only control the table renders." Covers the
-      five controls that carry no visible text of their own (star toggle,
-      three link-outs, copy-report); the heart/comparison-target/provenance
-      icons are deliberately absent, since each already sits beside its own
-      explanatory sentence and a legend entry would only restate it.
-
-      Static markup rather than a `_prepareContext`-built view-model: the icon
-      set is fixed in this template, so a context array would only restate it
-      (CLAUDE.md project rule 2). The icons are aria-hidden and the legend
-      itself is not focusable — screen readers get each control's specific
-      action from its own aria-label (Accessibility Requirements § Icon-Only
-      Controls); this legend is the sighted-GM equivalent of those labels. }}
-  <div class="icon-legend">
-    <span class="icon-legend-heading" id="the-plugin-plugin-icon-legend-heading">
-      {{localize "THE-PLUGIN-PLUGIN.CheckerTable.LegendHeading"}}
-    </span>
-    <ul aria-labelledby="the-plugin-plugin-icon-legend-heading">
-      <li>
-        <i class="fa-solid fa-star" aria-hidden="true"></i>
-        {{localize "THE-PLUGIN-PLUGIN.CheckerTable.LegendStar"}}
-      </li>
-      <li>
-        <i class="fa-solid fa-arrow-up-right-from-square" aria-hidden="true"></i>
-        {{localize "THE-PLUGIN-PLUGIN.CheckerTable.LegendProjectPage"}}
-      </li>
-      <li>
-        <i class="fa-solid fa-bug" aria-hidden="true"></i>
-        {{localize "THE-PLUGIN-PLUGIN.CheckerTable.LegendReportIssue"}}
-      </li>
-      <li>
-        <i class="fa-solid fa-clock-rotate-left" aria-hidden="true"></i>
-        {{localize "THE-PLUGIN-PLUGIN.CheckerTable.LegendChangelog"}}
-      </li>
-      <li>
-        <i class="fa-solid fa-copy" aria-hidden="true"></i>
-        {{localize "THE-PLUGIN-PLUGIN.CheckerTable.LegendCopyReport"}}
-      </li>
-    </ul>
-  </div>
-
   {{! Governing: SPEC-0001 "Accessibility Requirements" § ARIA Landmarks —
       role="main" on the results table region. }}
   <div role="main" aria-label="{{resultsRegionLabel}}" class="checker-table-region">
@@ -180,5 +139,52 @@
         {{/each}}
       </tbody>
     </table>
+  </div>
+
+  {{! Governing: SPEC-0001 REQ "Checker Table" — "The window MUST display a
+      legend naming every icon-only control the table renders." Covers the
+      five controls that carry no visible text of their own (star toggle,
+      three link-outs, copy-report); the heart/comparison-target/provenance
+      icons are deliberately absent, since each already sits beside its own
+      explanatory sentence and a legend entry would only restate it.
+
+      Placed after the table (GM feedback): the results are what a GM opens
+      this window for, and a key is something you consult once and then stop
+      reading. The table region above it is the flex child that grows
+      (`flex: 1` in styles/), so the legend sits against the bottom edge of
+      the window rather than scrolling away with the rows.
+
+      Static markup rather than a `_prepareContext`-built view-model: the icon
+      set is fixed in this template, so a context array would only restate it
+      (CLAUDE.md project rule 2). The icons are aria-hidden and the legend
+      itself is not focusable — screen readers get each control's specific
+      action from its own aria-label (Accessibility Requirements § Icon-Only
+      Controls); this legend is the sighted-GM equivalent of those labels. }}
+  <div class="icon-legend">
+    <span class="icon-legend-heading" id="the-plugin-plugin-icon-legend-heading">
+      {{localize "THE-PLUGIN-PLUGIN.CheckerTable.LegendHeading"}}
+    </span>
+    <ul aria-labelledby="the-plugin-plugin-icon-legend-heading">
+      <li>
+        <i class="fa-solid fa-star" aria-hidden="true"></i>
+        {{localize "THE-PLUGIN-PLUGIN.CheckerTable.LegendStar"}}
+      </li>
+      <li>
+        <i class="fa-solid fa-arrow-up-right-from-square" aria-hidden="true"></i>
+        {{localize "THE-PLUGIN-PLUGIN.CheckerTable.LegendProjectPage"}}
+      </li>
+      <li>
+        <i class="fa-solid fa-bug" aria-hidden="true"></i>
+        {{localize "THE-PLUGIN-PLUGIN.CheckerTable.LegendReportIssue"}}
+      </li>
+      <li>
+        <i class="fa-solid fa-clock-rotate-left" aria-hidden="true"></i>
+        {{localize "THE-PLUGIN-PLUGIN.CheckerTable.LegendChangelog"}}
+      </li>
+      <li>
+        <i class="fa-solid fa-copy" aria-hidden="true"></i>
+        {{localize "THE-PLUGIN-PLUGIN.CheckerTable.LegendCopyReport"}}
+      </li>
+    </ul>
   </div>
 </div>
