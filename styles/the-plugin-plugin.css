@@ -32,6 +32,44 @@
   gap: 0.75rem;
 }
 
+/* Governing: SPEC-0001 REQ "Checker Table" — the icon legend. Sits at the
+ * bottom of the window, below the results (GM feedback), reading as a
+ * footer: the rule above it separates it from the last table row, and the
+ * muted treatment (same as .developer-declared-note) keeps it from competing
+ * with the rows. The table region is the flex child that grows, so this
+ * stays against the window's bottom edge instead of scrolling with the rows.
+ * Wraps rather than scrolls: the window is resizable, and a narrow window
+ * should reflow the key, not clip it. */
+.the-plugin-plugin-checker-table .icon-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 0.75rem;
+  padding-top: 0.4rem;
+  border-top: 1px solid var(--color-border-light-tertiary, #c9c7b8);
+  font-size: var(--font-size-12, 12px);
+  opacity: 0.8;
+}
+
+.the-plugin-plugin-checker-table .icon-legend ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.75rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* Deliberately not `white-space: nowrap`: the star entry is the longest by
+ * some margin, and in a narrow window nowrap would push the legend wider
+ * than the window rather than wrapping its text. The icon aligns to the
+ * first line's baseline when an entry does wrap. */
+.the-plugin-plugin-checker-table .icon-legend li {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.3rem;
+}
+
 .the-plugin-plugin-checker-table .checker-table-region {
   flex: 1;
   overflow: auto;

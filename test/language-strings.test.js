@@ -139,6 +139,38 @@ test("none of the four target-version strings imply a package is at fault for an
   }
 });
 
+// --- Icon legend (SPEC-0001 REQ "Checker Table") ----------------------------
+// The legend is static markup in templates/checker-table.hbs, so the only
+// thing that belongs at this level is that each key resolves to distinct,
+// non-empty text — a legend with two identically-worded entries, or a
+// missing one, is a legend that doesn't tell a GM which icon is which.
+
+const LEGEND_KEYS = [
+  "THE-PLUGIN-PLUGIN.CheckerTable.LegendHeading",
+  "THE-PLUGIN-PLUGIN.CheckerTable.LegendStar",
+  "THE-PLUGIN-PLUGIN.CheckerTable.LegendProjectPage",
+  "THE-PLUGIN-PLUGIN.CheckerTable.LegendReportIssue",
+  "THE-PLUGIN-PLUGIN.CheckerTable.LegendChangelog",
+  "THE-PLUGIN-PLUGIN.CheckerTable.LegendCopyReport",
+];
+
+test("languages/en.json resolves every icon-legend key to non-empty, distinct text", () => {
+  const values = LEGEND_KEYS.map((key) => strings[key]);
+  for (const [index, value] of values.entries()) {
+    assert.ok(
+      typeof value === "string" && value.length > 0,
+      `${LEGEND_KEYS[index]} must resolve to a non-empty string`
+    );
+  }
+  assert.equal(new Set(values).size, values.length);
+});
+
+test("the star legend entry says what starring does, using the GM-facing 'star' wording, not 'pin' (SPEC-0001 terminology)", () => {
+  const star = strings["THE-PLUGIN-PLUGIN.CheckerTable.LegendStar"].toLowerCase();
+  assert.match(star, /star/);
+  assert.ok(!/\bpin(ned|s)?\b/.test(star), "GM-facing text says 'starred', never 'pinned'");
+});
+
 // --- Requirement: Result Provenance (SPEC-0002) -----------------------------
 
 test("languages/en.json defines the fallback-provenance note string, non-empty", () => {
