@@ -155,13 +155,28 @@ not every intermediate commit on a WIP branch. A prototype branch bumps
 `version` for honest bookkeeping; it does not get tagged until it's merged
 and actually ready to ship.
 
-Once this module is accepted into Foundry's official package list, tagging
-discipline gets stricter: every merge to `main` that ships a real change
-should get its own tag and release rather than batching several PRs into
-one, since the Setup-screen manifest URL GMs see there is exactly the kind
-of "developer-declared, freshly published" data this module itself reads
-from other packages (rule 4) — sloppy tagging here would be the same
-failure mode this module exists to flag elsewhere.
+Post-1.0, individual PRs will likely stop targeting `main` directly and
+land on a long-lived `release/X.Y.Z` branch instead — several fixes and
+features accumulate there, and when that branch is ready to ship it merges
+to `main` and gets tagged as one coordinated release, with release notes
+describing everything that landed since the last one. Feature/fix PRs
+merging into a release branch don't each need their own `module.json`
+bump or tag — they're not shipping standalone; the release branch itself
+carries the version that gets set (and tagged) when it's cut. The existing
+release workflow already auto-generates release notes from merged PRs in
+a tag's range (`generate_release_notes: true` in `release.yml`), so this
+mostly falls out of the existing CI as long as changes land as real PRs
+merged into the release branch rather than direct pushes.
+
+This replaces the pre-1.0 pattern above (bump on every branch, tag
+individually) once release branches start — not a parallel process, a
+graduation to it. Exactly when to switch is still open; "once accepted
+into Foundry's official package list" is the most likely trigger, since
+that's when the Setup-screen manifest URL GMs see becomes the same kind of
+externally-visible "developer-declared, freshly published" data this
+module itself reads from other packages (rule 4) — and a steadier,
+curated release cadence matters more once GMs are discovering it that way
+rather than by a direct link.
 
 ## Prior art
 
