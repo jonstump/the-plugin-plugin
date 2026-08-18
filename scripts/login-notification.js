@@ -622,7 +622,7 @@ async function postChatSummary(
 ) {
   const i18n = gameInstance.i18n;
 
-  // PROTOTYPE (not committed) — trimmed down from the full six-status
+  // PROTOTYPE (mock — see ADR-0009) — trimmed down from the full six-status
   // breakdown to just two lines for a quick demo: verified/unverified and
   // has-updates. "Verified" = up to date & verified + verified/update
   // unknown; everything else (hard/soft issues, possibly unmaintained,
@@ -638,7 +638,7 @@ async function postChatSummary(
     `<li>${summary.updatesAvailable ?? 0} update${summary.updatesAvailable === 1 ? "" : "s"} available</li>`,
   ].join("");
 
-  // PROTOTYPE (not committed) — "Should I update?" mock verdict. Pins are
+  // PROTOTYPE (mock — see ADR-0009) — "Should I update?" mock verdict. Pins are
   // load-bearing: ANY starred/pinned package with a genuine verification
   // risk (not-yet-verified, possibly unmaintained, couldn't check) forces
   // "No" outright, regardless of everything else — a starred module is
@@ -675,7 +675,7 @@ async function postChatSummary(
     targetVersion: versionContext.targetVersion ?? "",
   });
 
-  // PROTOTYPE (not committed) — tightened starred-modules list: instead of
+  // PROTOTYPE (mock — see ADR-0009) — tightened starred-modules list: instead of
   // the full status sentence, each entry gets short icon+word flags.
   // "Unverified" covers all three risk statuses (not-yet-verified, possibly
   // unmaintained, couldn't check) rather than naming which one — core-

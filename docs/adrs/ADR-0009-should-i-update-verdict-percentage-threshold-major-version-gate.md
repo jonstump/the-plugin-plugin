@@ -12,7 +12,7 @@ related: [ADR-0004]
 
 The login notification currently reports raw counts (verified vs. unverified,
 updates available) and leaves the "is it actually safe to update Foundry"
-judgment entirely to the GM. A quick, explicitly uncommitted prototype
+judgment entirely to the GM. A quick throwaway prototype
 (`postChatSummary` in `scripts/login-notification.js`, plus matching CSS)
 explored a synthesized three-way verdict — computed as: any starred/pinned
 package with a genuine verification risk forces a hard "No," otherwise
@@ -220,12 +220,25 @@ flowchart TD
 
 ## More Information
 
-* The uncommitted prototype that motivated this ADR lives in
+* The prototype that motivated this ADR lives in
   `scripts/login-notification.js` (`postChatSummary`'s inline "Should I
   update?" block) and `styles/the-plugin-plugin.css` (the matching
   `verdict-yes`/`verdict-no`/`verdict-maybe` and `verdict-flag` rules) — it
-  is a two-tier, always-computed mock and is expected to be replaced by
-  the design this ADR describes, not extended in place.
+  is an always-computed mock and is expected to be replaced by the design
+  this ADR describes, not extended in place.
+* **The prototype is committed on this branch**, and `module.json` is
+  bumped accordingly, per CLAUDE.md's versioning convention that an
+  experimental prototype out for real-world feedback still bumps `version`
+  when pushed. Earlier revisions of this ADR described it as "uncommitted,"
+  which was true while it was being iterated on locally and stopped being
+  true the moment it was committed alongside this file. Committed is not
+  the same as decided: what ships here is the mock, not the design below.
+* What the mock actually does differs from the Decision Outcome in three
+  ways, all deliberate — it has no percentage threshold, no GM setting, and
+  no major-version gate. Its middle state ("Maybe") fires whenever *any*
+  package is unverified. Do not read the prototype as a partial
+  implementation of this ADR; none of the three chosen mechanisms exist
+  yet.
 * Relates to SPEC-0001 REQ "Login Notification" (will need a REQ addition
   once this ADR is accepted) and REQ "Pinned Critical Modules".
 * `determineComparisonTarget`/`toGeneration` in

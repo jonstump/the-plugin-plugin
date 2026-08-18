@@ -6,9 +6,11 @@
   notification — pinned modules gate to a hard "No," a GM-configurable
   percentage threshold decides "Yes" vs. "Proceed with caution" for the
   rest of the modlist, computed only on a major (generation) Foundry
-  version change. Prototype UI (uncommitted-turned-WIP) in
+  version change. Prototype UI in
   `scripts/login-notification.js`/`styles/the-plugin-plugin.css` is out for
-  real-world feedback; not yet the real implementation.
+  real-world feedback; it is a mock with none of the three mechanisms the
+  ADR chose (no threshold, no setting, no major-version gate), not a
+  partial implementation.
 - Repo scaffold: `module.json`, project rules (`CLAUDE.md`), README, MIT
   license, CI release workflow, and the Foundry-version-detection research
   doc.

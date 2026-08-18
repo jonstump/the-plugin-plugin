@@ -152,7 +152,7 @@
   font-weight: bold;
 }
 
-/* PROTOTYPE (not committed) — "Should I update?" mock verdict line. */
+/* PROTOTYPE (mock — see ADR-0009) — "Should I update?" mock verdict line. */
 .the-plugin-plugin-login-summary .the-plugin-plugin-update-verdict {
   margin: 0 0 0.5rem 0;
   padding: 0.35rem 0.6rem;
@@ -182,7 +182,7 @@
   margin: 0 0 0.75rem 0;
 }
 
-/* PROTOTYPE (not committed) — tightened starred-module flags (icon + short
+/* PROTOTYPE (mock — see ADR-0009) — tightened starred-module flags (icon + short
  * word) replacing the full status sentence. */
 .the-plugin-plugin-login-summary .verdict-flag {
   display: inline-flex;
