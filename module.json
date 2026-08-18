@@ -2,7 +2,7 @@
   "id": "the-plugin-plugin",
   "title": "The Plugin Plugin",
   "description": "Checks a GM's installed modules for update availability and Foundry-version compatibility, from inside the world — not just at the setup screen. Compatibility is developer-declared (from package manifests), not community-tested.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "compatibility": {
     "minimum": "13",
     "verified": "14"
