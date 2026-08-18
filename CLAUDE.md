@@ -125,6 +125,59 @@ regardless of real staleness (issue #22); see
 - GitHub release workflow: CI builds a release zip + `module.json` with a
   stable `releases/latest/download/module.json` manifest URL.
 
+## Versioning
+
+`module.json`'s `version` field bumps as part of the branch/PR that makes
+the change, not as an afterthought at release time — a branch that changes
+behavior (including an experimental prototype out for real-world feedback,
+like ADR-0009's mock) should leave `version` incremented when it's pushed,
+same as it leaves tests updated.
+
+While pre-1.0 (`0.x.y`), semver applies at that scale:
+
+- **Patch** (`0.x.Y`): bug fixes, doc-only changes, anything with no
+  behavior change.
+- **Minor** (`0.X.0`): new functionality — including a prototype/experiment
+  merged as real committed code (this project has no feature-flag
+  mechanism per rule 2's KISS/no-dependencies stance, so "experimental"
+  means "documented as such," not "hidden behind a flag").
+- **1.0.0**: reserved for when the full v1 scope (see "Core v1 scope"
+  above) is built *and* real-world validated — not just code-complete.
+  "Andy says it meets his needs" is the kind of signal that moves this
+  forward; a passing test suite alone is not.
+
+A version bump in `module.json` is not the same commitment as a git tag.
+Tagging (`vX.Y.Z`, triggers `.github/workflows/release.yml`) publishes a
+real GitHub release and moves the `releases/latest/download/...` URLs
+every installed instance of this module points at — that's an externally
+visible act, reserved for versions actually meant for someone to install,
+not every intermediate commit on a WIP branch. A prototype branch bumps
+`version` for honest bookkeeping; it does not get tagged until it's merged
+and actually ready to ship.
+
+Post-1.0, individual PRs will likely stop targeting `main` directly and
+land on a long-lived `release/X.Y.Z` branch instead — several fixes and
+features accumulate there, and when that branch is ready to ship it merges
+to `main` and gets tagged as one coordinated release, with release notes
+describing everything that landed since the last one. Feature/fix PRs
+merging into a release branch don't each need their own `module.json`
+bump or tag — they're not shipping standalone; the release branch itself
+carries the version that gets set (and tagged) when it's cut. The existing
+release workflow already auto-generates release notes from merged PRs in
+a tag's range (`generate_release_notes: true` in `release.yml`), so this
+mostly falls out of the existing CI as long as changes land as real PRs
+merged into the release branch rather than direct pushes.
+
+This replaces the pre-1.0 pattern above (bump on every branch, tag
+individually) once release branches start — not a parallel process, a
+graduation to it. Exactly when to switch is still open; "once accepted
+into Foundry's official package list" is the most likely trigger, since
+that's when the Setup-screen manifest URL GMs see becomes the same kind of
+externally-visible "developer-declared, freshly published" data this
+module itself reads from other packages (rule 4) — and a steadier,
+curated release cadence matters more once GMs are discovering it that way
+rather than by a direct link.
+
 ## Prior art
 
 `arcanistzed/mcc` (MIT, archived) solved a related problem with a Cloudflare
