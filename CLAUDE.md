@@ -125,6 +125,44 @@ regardless of real staleness (issue #22); see
 - GitHub release workflow: CI builds a release zip + `module.json` with a
   stable `releases/latest/download/module.json` manifest URL.
 
+## Versioning
+
+`module.json`'s `version` field bumps as part of the branch/PR that makes
+the change, not as an afterthought at release time — a branch that changes
+behavior (including an experimental prototype out for real-world feedback,
+like ADR-0009's mock) should leave `version` incremented when it's pushed,
+same as it leaves tests updated.
+
+While pre-1.0 (`0.x.y`), semver applies at that scale:
+
+- **Patch** (`0.x.Y`): bug fixes, doc-only changes, anything with no
+  behavior change.
+- **Minor** (`0.X.0`): new functionality — including a prototype/experiment
+  merged as real committed code (this project has no feature-flag
+  mechanism per rule 2's KISS/no-dependencies stance, so "experimental"
+  means "documented as such," not "hidden behind a flag").
+- **1.0.0**: reserved for when the full v1 scope (see "Core v1 scope"
+  above) is built *and* real-world validated — not just code-complete.
+  "Andy says it meets his needs" is the kind of signal that moves this
+  forward; a passing test suite alone is not.
+
+A version bump in `module.json` is not the same commitment as a git tag.
+Tagging (`vX.Y.Z`, triggers `.github/workflows/release.yml`) publishes a
+real GitHub release and moves the `releases/latest/download/...` URLs
+every installed instance of this module points at — that's an externally
+visible act, reserved for versions actually meant for someone to install,
+not every intermediate commit on a WIP branch. A prototype branch bumps
+`version` for honest bookkeeping; it does not get tagged until it's merged
+and actually ready to ship.
+
+Once this module is accepted into Foundry's official package list, tagging
+discipline gets stricter: every merge to `main` that ships a real change
+should get its own tag and release rather than batching several PRs into
+one, since the Setup-screen manifest URL GMs see there is exactly the kind
+of "developer-declared, freshly published" data this module itself reads
+from other packages (rule 4) — sloppy tagging here would be the same
+failure mode this module exists to flag elsewhere.
+
 ## Prior art
 
 `arcanistzed/mcc` (MIT, archived) solved a related problem with a Cloudflare
